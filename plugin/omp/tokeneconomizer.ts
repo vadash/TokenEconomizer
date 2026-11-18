@@ -37,6 +37,19 @@ const HERE = (() => {
 const SCRIPTS = join(HERE, "..", "scripts");
 const HOOK_TIMEOUT_MS = 60_000;
 const SECTION = "tokeneconomizer";
+// The user-facing subcommands, in the order `te help` prints them. Bare `/te` prints that list
+// (the CLI's `_HELP`, which owns the one-line descriptions); the picker offers only the names,
+// so no description is repeated here.
+const SUBCOMMANDS = [
+  "status",
+  "microskills",
+  "toolprune",
+  "config",
+  "repos",
+  "history",
+  "repomap",
+  "doctor",
+];
 
 const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 
@@ -245,10 +258,22 @@ export default function tokeneconomizer(api: ExtensionAPI) {
   });
 
   api.registerCommand("te", {
-    description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
+    description: "TokenEconomizer: help, status, and repo learning (what it learned here, what it did)",
+    // `te <prefix>` opens the subcommand list, as omp's own commands do; past the first word
+    // there is nothing to offer.
+    getArgumentCompletions: (prefix) => {
+      if (prefix.includes(" ")) return null;
+      const p = prefix.toLowerCase();
+      const matches = SUBCOMMANDS.filter((name) => name.startsWith(p)).map((name) => ({
+        value: `${name} `,
+        label: name,
+      }));
+      return matches.length ? matches : null;
+    },
     handler: async (args, ctx) => {
       // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
-      const argv = ["--argline", (args || "").trim() || "status"];
+      // Bare `/te` prints the same one-line list as `te help`.
+      const argv = ["--argline", (args || "").trim() || "help"];
       // The session id lets `te status` say when this session is recorded under the repository
       // it started in rather than the one `ctx.cwd` is in now.
       const out = await run("te", ["--host", "omp", "--cwd", ctx.cwd, ...argv], "", ctx.mode, {
