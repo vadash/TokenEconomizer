@@ -459,6 +459,52 @@ class Pi(Host):
         return trace.pi_session_usage(transcript_path)
 
 
+class Omp(Host):
+    """oh-my-pi (`omp`), through the TypeScript extension in `plugin/omp/`.
+
+    omp has no hook protocol of its own -- extensions are functions on its event bus -- so
+    the extension speaks THIS one on omp's behalf, as the Pi extension does: it calls the
+    same dispatcher with a Claude-shaped payload per event and applies the answer with omp's
+    own levers (a system-prompt block, a steer message). What it sends:
+
+      * `prompt_id`, which it numbers itself, for the turn identity omp does not stamp;
+      * `tool_response = {content, isError, exit_code}`, its bash result's real exit code;
+      * its mode in `TE_OMP_MODE` on the hook's environment: print / json / rpc are headless.
+
+    omp keeps only a digest of its system prompt, so a resumed conversation does not carry
+    what its first start added. Its subagents are full sessions of their own, not sidechains
+    marked in the parent, so no session is marked a subagent and the loop guard covers every
+    one at every depth.
+    """
+    name = "omp"
+    prompt_context = True
+    keeps_start_context = False
+    # omp's terminal works as Pi's does: Esc aborts the turn and its command; Ctrl+C ends
+    # `omp -p`, but a command it started runs on (detached) until it finishes.
+    interrupt = "Press Esc to abort it."
+    end_run = "Press Ctrl+C to end the run; a command it started runs on until it finishes."
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def is_subagent(self, p):
+        return False
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_OMP_MODE", "")).strip() in ("print", "json", "rpc")
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "omp_trace.jsonl")
+        n = trace.pi_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.pi_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.pi_session_usage(transcript_path)
+
+
 class OpenCode(Host):
     """opencode (anomalyco/opencode), through the plugin in `plugin/opencode/`.
 
@@ -1318,8 +1364,8 @@ class Droid(Host):
 
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "droid": Droid,
-         "opencode": OpenCode, "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
-         "antigravity": Antigravity}
+         "opencode": OpenCode, "omp": Omp, "pi": Pi, "cursor": Cursor, "hermes": Hermes,
+         "grok": Grok, "antigravity": Antigravity}
 
 
 def default_host(env=None, recent=None):
@@ -1338,6 +1384,9 @@ def default_host(env=None, recent=None):
         return "cursor"
     if env.get("GROK_SESSION_ID"):
         return "grok"
+    # omp's bash tool marks its shell with the session it runs; upstream Pi marks neither.
+    if env.get("PI_SESSION_ID") or env.get("PI_SESSION_FILE"):
+        return "omp"
     # Droid marks its shell with the session it runs; checked last, so an agent started from
     # inside Droid is read as its own host.
     if env.get("FACTORY_SESSION_ID") or env.get("DROID_PLUGIN_ROOT"):

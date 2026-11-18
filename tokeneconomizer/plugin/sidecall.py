@@ -391,6 +391,30 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     return text, eff
 
 
+# A side call only answers, so it loads no tools, skills, extensions, context files or MCP
+# servers, and runs offline from an empty directory.
+OMP_FLAGS = ("--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
+             "--no-skills", "--no-context-files", "--offline")
+
+
+def omp_call(prompt, model="", cli="omp", timeout=TIMEOUT_S):
+    model_args = ["--model", model] if model else []
+    cmd = [*program(cli), *OMP_FLAGS, *model_args, "--", prompt]
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd,
+                             stdin=subprocess.DEVNULL)
+    text, usage = trace.pi_json_reply(out.stdout)
+    if not text:
+        _no_reply("omp", out)
+    eff = None
+    if usage:
+        usage.pop("cost_usd", None)
+        usage["model"] = usage.get("model") or model or "omp"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 # A side call only answers, so what can change anything or reach out is denied. Its directory is
 # an empty throwaway one, which is why the read-only tools are left alone: opencode 1.19.5 stalls
 # at startup, with no output, when `read`, `task` or `*` is denied (it waits on a prompt nobody
@@ -1011,6 +1035,9 @@ def _host_call(host_name, config):
         extensions = list(config.pi_extensions)
         return lambda prompt, _m="agent": pi_call(prompt, model=model, cli=cli,
                                                   extensions=extensions)
+    if host_name == "omp":
+        cli = os.path.expanduser(config.omp_cli) if config.omp_cli else "omp"
+        return lambda prompt, _m="agent": omp_call(prompt, model=model, cli=cli)
     if host_name == "opencode":
         return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "cursor":

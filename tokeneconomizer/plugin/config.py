@@ -48,7 +48,7 @@ person can tune by hand:
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
   * <agent>_paid_model          -- the model of the plugin's own calls on that agent, over
                                    `paid_model` (claude, codex, copilot, pi, opencode, cursor,
-                                   grok, hermes, droid);
+                                   grok, hermes, droid, omp);
   * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
   * local_model, local_roles   -- run the named side calls (`judge`, `nudge`, `proposer`;
                                    default `judge`) on an on-device model instead of the
@@ -64,6 +64,7 @@ person can tune by hand:
   * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;
+  * omp_cli                     -- on omp, the `omp` the plugin's own model calls run;
   * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
   * droid_sidecall              -- on Droid, allow the plugin's own model calls. They run
                                    `droid exec`, which writes a session log of its own, so this
@@ -207,6 +208,7 @@ class LiveConfig:
     grok_paid_model: str = ""
     hermes_paid_model: str = ""
     droid_paid_model: str = ""
+    omp_paid_model: str = ""
     claude_paid_effort: str = ""
     codex_paid_effort: str = ""
     local_model: str = "off"
@@ -214,6 +216,7 @@ class LiveConfig:
     local_judge_confidence: float = 0.9
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
+    omp_cli: str = ""
     hermes_cli: str = ""
     droid_sidecall: bool = False
     history_import: bool = False
@@ -337,7 +340,8 @@ class LiveConfig:
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
         **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
-            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes", "droid")},
+            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes", "droid",
+            "omp")},
         "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
         "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
         "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
@@ -360,6 +364,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
         "TE_PI_EXTENSIONS": "pi_extensions", "TE_PI_CLI": "pi_cli",
+        "TE_OMP_CLI": "omp_cli",
         "TE_HERMES_CLI": "hermes_cli",
         "TE_HISTORY_IMPORT": "history_import", "TE_HISTORY_MAX_SESSIONS": "history_max_sessions",
         "TE_HISTORY_DAYS": "history_days", "TE_HISTORY_DIRS": "history_dirs"}
