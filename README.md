@@ -123,6 +123,13 @@ Run these commands in the folder where you want to keep the clone. Claude Code, 
 Copilot CLI and opencode run the plugin from the clone, so leave it in place. Then start the agent
 in one of your repositories.
 
+**OMP**
+
+```sh
+omp plugin uninstall tokeneconomizer
+omp plugin install git:github.com/vadash/TokenEconomizer
+```
+
 **Claude Code**
 
 ```sh
