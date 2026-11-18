@@ -20,21 +20,24 @@ session start, and the unit of removal is whatever that file can express:
     trusted folder (Copilot's `trustedFolders`). Copilot has no persistent per-tool filter
     (`--excluded-tools` is a launch flag; `permissions.deny` refuses calls but leaves the schema
     in the request), so a server is proposed only when every one of its tools has gone unused.
+  * omp -- a TOOL, from a list the extension applies at session start (`setActiveTools`). There
+    is no omp settings file for it: the plugin keeps the applied list in its own state and the
+    SessionStart answer names the tools to remove.
 
-Rules common to all three:
+Rules common to these hosts:
 
-  * `toolprune: auto` (the default) writes the file once a proposal forms and the repository's
+  * `toolprune: auto` (the default) writes the list once a proposal forms and the repository's
     sessions have been idle for `toolprune_quiet_minutes` (`fold.apply_pending`), and the next
     session start says so; with `toolprune: propose` only the person's approval (`te toolprune
     apply`) does. Either way it applies from the NEXT session. Verified on Claude Code 2.1.307,
     Codex 0.163.0 and Copilot 1.0.102 (docs/PLUGIN.md §3): a running session keeps the tools
     it started with; a conversation resumed after the change sends the new tools, which
     re-writes its whole history to the prompt cache -- hence the wait.
-  * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`,
+  * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`:
     per settings file, since the clones of one repository share its state but not their
-    settings); an entry the person wrote is never touched.
-  * When the plugin creates the file, it adds the path to `.git/info/exclude`, so a file meant
-    to be per-user can never be committed by accident.
+    settings; for omp, under one state key); an entry the person wrote is never touched.
+  * When the plugin creates a settings file, it adds the path to `.git/info/exclude`, so a file
+    meant to be per-user can never be committed by accident. omp has no such file.
 
 Checking what an applied list did, and measuring a request with and without it, is
 `toolcheck`'s job.
@@ -54,7 +57,9 @@ CODEX_CONFIG_REL = os.path.join(".codex", "config.toml")
 COPILOT_SETTINGS_REL = os.path.join(".github", "copilot", "settings.local.json")
 
 _SETTINGS = {"claude": SETTINGS_REL, "codex": CODEX_CONFIG_REL, "copilot": COPILOT_SETTINGS_REL}
-_UNITS = {"claude": "tool", "codex": "capability", "copilot": "MCP server"}
+_UNITS = {"claude": "tool", "codex": "capability", "copilot": "MCP server", "omp": "tool"}
+# omp has no settings file: its applied list is recorded under this state key instead.
+OMP_LIST = "omp:session"
 
 # Codex capability -> (table or None for top level, key, TOML value). Each probed project-local
 # on 0.153.1 (see the module docstring); `te_harness.codex` holds the launch-time superset.
@@ -74,7 +79,7 @@ MARK = "# tokeneconomizer"
 
 
 def supports(host):
-    return host in _SETTINGS
+    return host in _SETTINGS or host == "omp"
 
 
 def unit(host, plural=False):
@@ -174,7 +179,11 @@ APPLIED = "untool_applied.json"
 
 
 def _canon(path):
-    return os.path.realpath(path) if path else ""
+    return path if path == OMP_LIST else (os.path.realpath(path) if path else "")
+
+
+def _list_key(repo_root, host):
+    return OMP_LIST if host == "omp" else _canon(settings_path(repo_root, host))
 
 
 def applied_by_path(doc):
@@ -203,15 +212,14 @@ def write_applied(store, by_path, kept=None):
 
 def kept_for(store, repo_root, host="claude"):
     """What the person gave back in this checkout, which `auto` must leave alone."""
-    return list(kept_by_path(store.read(APPLIED) or {}).get(
-        _canon(settings_path(repo_root, host))) or [])
+    return list(kept_by_path(store.read(APPLIED) or {}).get(_list_key(repo_root, host)) or [])
 
 
 def set_kept(store, repo_root, host, add=(), remove=()):
     """Mark entries as given back by the person (`restore`), or no longer (`apply` by name)."""
     doc = store.read(APPLIED) or {}
     kept = kept_by_path(doc)
-    path = _canon(settings_path(repo_root, host))
+    path = _list_key(repo_root, host)
     kept[path] = sorted((set(kept.get(path) or []) | set(add)) - set(remove))
     write_applied(store, applied_by_path(doc), kept)
 
@@ -225,8 +233,9 @@ def applied(store, path=None):
 
 
 def applied_for(store, repo_root, host="claude"):
-    """What the plugin added to this checkout's settings file for `host`."""
-    return applied(store, settings_path(repo_root, host))
+    """What the plugin added to this checkout's settings file for `host`; for omp, the list it
+    answers each session with."""
+    return applied(store, _list_key(repo_root, host))
 
 
 def _record(store, items, path):
@@ -531,9 +540,29 @@ def codex_project_trusted(repo_root, env=None):
     return False
 
 
+# ---- omp: a list in the plugin's own state, applied by its extension at session start -------
+def _apply_omp(tools, store):
+    mine = set(applied(store, OMP_LIST))
+    added = sorted(set(tools) - mine)
+    if added:
+        _record(store, mine | set(tools), OMP_LIST)
+    return added
+
+
+def _restore_omp(store, tools):
+    mine = set(applied(store, OMP_LIST))
+    target = mine if not tools else mine & set(tools)
+    if not target:
+        return []
+    _record(store, mine - target, OMP_LIST)
+    return sorted(target)
+
+
 # ---- dispatch ------------------------------------------------------------------------------
 def apply(repo_root, tools, store, host="claude"):
     """Write `tools` (tools, capabilities or MCP servers, by host). Returns those newly added."""
+    if host == "omp":
+        return _apply_omp(tools, store)
     if host == "codex":
         return _apply_codex(repo_root, tools, store)
     return _apply_json_list(repo_root, tools, store, host)
@@ -541,6 +570,8 @@ def apply(repo_root, tools, store, host="claude"):
 
 def restore(repo_root, store, tools=None, host="claude"):
     """Remove entries this plugin added (all of them, or just `tools`). Returns removed."""
+    if host == "omp":
+        return _restore_omp(store, tools)
     if host == "codex":
         return _restore_codex(repo_root, store, tools)
     return _restore_json_list(repo_root, store, tools, host)

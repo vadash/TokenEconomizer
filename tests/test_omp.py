@@ -1,13 +1,17 @@
 """oh-my-pi (`omp`) as a host: the turn identity and tool result its adapter sends, its headless
 modes, its session log read through the Pi trace, the shell it marks, and its side call."""
+import io
 import json
 import os
 import subprocess
 
 import pytest
 
-from tokeneconomizer.plugin import config as live_config, hosts, sidecall
+from tokeneconomizer.plugin import (adapter, cli, config as live_config, denylist, hook, hosts,
+                                    paths, sidecall)
+from tokeneconomizer.plugin.context import LiveContext
 from tokeneconomizer.plugin.hosts import Omp
+from tokeneconomizer.plugin.store import Store
 
 SESSION = {"type": "session", "version": 3, "id": "01a1", "cwd": "C:/repo"}
 
@@ -125,3 +129,84 @@ def test_the_omp_runner_uses_the_cli_the_person_names(monkeypatch):
     cfg.set("omp_cli", "~/bin/omp")
     assert sidecall.runner_for("omp", cfg)("prompt") == ("ok", 1)
     assert seen["cli"] == os.path.expanduser("~/bin/omp")
+
+
+# ---- tool pruning: the catalog and the deny list live in the plugin's state -----------------
+@pytest.fixture
+def env(tmp_path):
+    return {"TOKENECONOMIZER_HOME": str(tmp_path / "home"),
+            "TE_MICROSKILLS": "off", "TE_TOOLPRUNE": "off", "TE_LOOPGUARD": "off",
+            "GIT_CEILING_DIRECTORIES": str(tmp_path), "PATH": os.environ.get("PATH", "")}
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "repo"
+    (r / ".git" / "info").mkdir(parents=True)
+    (r / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (r / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/acme/widget.git\n')
+    (r / "pyproject.toml").write_text("[project]\nname='w'\n")
+    return str(r)
+
+
+def _start(env, repo, sid="omp-1", **kw):
+    payload = {"session_id": sid, "hook_event_name": "SessionStart", "source": "startup",
+               "cwd": repo, **kw}
+    out = io.StringIO()
+    hook.main(["--host", "omp"], io.StringIO(json.dumps(payload)), out, env)
+    return json.loads(out.getvalue().splitlines()[-1])
+
+
+def test_a_session_start_catalog_is_merged_into_the_omp_state(env, repo):
+    _start(env, repo, tool_catalog=["bash", "read"])
+    _start(env, repo, sid="omp-2", tool_catalog=["read", "edit"])
+    root = paths.state_root(env)
+    assert adapter.load_catalog(root, "omp") == {"bash": "", "edit": "", "read": ""}
+    doc = json.load(open(adapter.catalog_path(root, "omp"), encoding="utf-8"))
+    assert doc["tools"] == ["bash", "edit", "read"] and doc["at"]
+
+
+def test_a_session_start_answer_names_the_tools_to_remove(env, repo):
+    ctx = LiveContext.build(Omp(), repo, env)
+    denylist.apply(repo, ["lsp", "debug"], ctx.store, host="omp")
+    assert _start(env, repo)["omp"] == {"denyTools": ["debug", "lsp"]}
+    assert "omp" not in _start(dict(env, TE_SHADOW="1"), repo, sid="omp-2")
+
+
+def test_the_omp_deny_list_is_plugin_state_and_never_a_settings_file(tmp_path):
+    st = Store(str(tmp_path / "st"))
+    assert denylist.supports("omp")
+    assert denylist.apply(tmp_path, ["lsp", "debug"], st, host="omp") == ["debug", "lsp"]
+    assert denylist.applied_for(st, tmp_path, "omp") == ["debug", "lsp"]
+    assert denylist.apply(tmp_path, ["lsp", "debug"], st, host="omp") == []
+    assert denylist.restore(tmp_path, st, ["lsp"], host="omp") == ["lsp"]
+    assert denylist.applied_for(st, tmp_path, "omp") == ["debug"]
+    denylist.set_kept(st, tmp_path, "omp", add=["debug"])
+    assert denylist.kept_for(st, tmp_path, "omp") == ["debug"]
+    denylist.set_kept(st, tmp_path, "omp", remove=["debug"])
+    assert denylist.kept_for(st, tmp_path, "omp") == []
+    assert not list(tmp_path.rglob("settings.local.json"))
+    assert not (tmp_path / ".claude").exists() and not (tmp_path / ".codex").exists()
+
+
+def test_toolprune_apply_and_restore_for_omp_say_where_they_take_effect(
+        tmp_path, monkeypatch, capsys):
+    r = tmp_path / "git-repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    (r / "pyproject.toml").write_text("[project]\nname='w'\n")
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
+    assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "apply",
+                     "lsp", "debug"]) == 0
+    out = capsys.readouterr().out
+    assert "lsp" in out and "debug" in out and "next omp session" in out
+    for needle in (".claude", ".codex", "settings.local"):
+        assert needle not in out
+    assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "refresh-catalog"]) == 0
+    assert "SessionStart" in capsys.readouterr().out
+    assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "measure"]) == 1
+    assert "not measured: omp pruning is applied by its extension" in capsys.readouterr().out
+    assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "restore"]) == 0
+    ctx = LiveContext.build(Omp(), str(r))
+    assert denylist.applied_for(ctx.store, str(r), "omp") == []

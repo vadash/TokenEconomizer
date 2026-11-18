@@ -487,6 +487,39 @@ class Omp(Host):
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
 
+    def prepare(self, payload, env):
+        """Keep the tool catalog this SessionStart reports, merged with what earlier sessions
+        reported: a fold needs every tool a session could call, not only the ones it used."""
+        p = dict(payload or {})
+        catalog = p.get("tool_catalog")
+        if not isinstance(catalog, list):
+            return p
+        try:
+            from . import adapter as live_adapter
+            from . import denylist
+            from .paths import state_root
+            path = live_adapter.catalog_path(state_root(env), "omp")
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    old = json.load(fh)
+                known = [t for t in old.get("tools") or [] if isinstance(t, str)]
+            except (OSError, ValueError, AttributeError):
+                known = []
+            tools = sorted(set(known) | {t for t in catalog if isinstance(t, str)})
+            denylist.write_json(path, {"tools": tools, "at": time.time()})
+        except Exception:              # a hook fails open: a catalog is an optimization
+            pass
+        return p
+
+    def render(self, payload, out, ctx):
+        """The extension applies the deny list at session start, and only there: the answer
+        names the tools to remove, from the plugin's state, never from an omp settings file."""
+        from . import denylist
+        if (payload or {}).get("hook_event_name") == "SessionStart" and not ctx.config.shadow:
+            out["omp"] = {"denyTools": sorted(
+                denylist.applied_for(ctx.store, ctx.repo.root, "omp"))}
+        return out
+
     def is_subagent(self, p):
         return False
 

@@ -377,10 +377,12 @@ def _microskills_forget(args):
 # ---- toolprune -----------------------------------------------------------------------------
 def _toolprune_show(ctx, unt):
     host = ctx.host.name
+    target = ("the omp session tool list (applied by the extension at session start)"
+              if host == "omp" else denylist.settings_path(ctx.repo.root, host))
     print(f"sessions observed: {unt.get('sessions', 0)} ({unt.get('prompts', 0)} prompts)  "
           f"catalog: {unt.get('catalog_source') or 'none yet'}")
     print(f"applied ({denylist.unit(host, plural=True)} this plugin added to "
-          f"{denylist.settings_path(ctx.repo.root, host)}): "
+          f"{target}): "
           f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
     print(f"proposed: {', '.join(_proposal(ctx, unt)) or '-'}")
     if unt.get("imported_sessions"):
@@ -512,9 +514,14 @@ def cmd_toolprune(args):
             return 1
         # Named by the person: no longer one they gave back, whatever `restore` said before.
         denylist.set_kept(ctx.store, ctx.repo.root, host, remove=tools)
-        print(f"added: {', '.join(added) or '(already present)'}\n"
-              f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the next "
-              f"session.")
+        if host == "omp":
+            print(f"added: {', '.join(added) or '(already present)'}\n"
+                  "the omp session tool list (applied by the extension at session start) -- "
+                  "takes effect from the next omp session.")
+        else:
+            print(f"added: {', '.join(added) or '(already present)'}\n"
+                  f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the "
+                  f"next session.")
         if host == "copilot" and added:
             if denylist.copilot_folder_trusted(ctx.repo.root) is False:
                 print("warning: Copilot reads a repository's .github/copilot settings only in a "
@@ -557,10 +564,17 @@ def cmd_toolprune(args):
             print("Codex needs no catalog: its removable capabilities are a fixed set "
                   f"({', '.join(denylist.CODEX_LIVE_CAPABILITIES)}), read from each session.")
             return 0
+        if host == "omp":
+            print("omp reports its tool catalog at each SessionStart; the plugin records it "
+                  "then.")
+            return 0
         path, tools = toolcheck.refresh_catalog(state_root(), host=host)
         print(f"{len(tools)} tools recorded in {path}:\n  " + ", ".join(tools))
         return 0
     if action == "measure":
+        if host == "omp":
+            print("not measured: omp pruning is applied by its extension")
+            return 1
         tools = args.tools or _proposal(ctx, unt) or denylist.applied_for(
             ctx.store, ctx.repo.root, host)
         if not tools:
