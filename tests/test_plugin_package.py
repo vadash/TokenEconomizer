@@ -682,6 +682,9 @@ def test_the_omp_manifest_names_its_own_extension():
     assert 'import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";' in src
     assert '"te-hook", ["--host", "omp"]' in src
     assert "setActiveTools" in src and "denyTools" in src
+    # omp exposes the agent identity on the context, not the API object; using `api.agent`
+    # threw "undefined is not an object" on every event in the live smoke.
+    assert "ctx.agent.kind" in src and "api.agent" not in src
     assert 'registerCommand("te"' in src
     assert set(re.findall(r'\.on\("(\w+)"', src)) == {
         "session_start", "session_switch", "before_agent_start", "tool_result", "agent_end",

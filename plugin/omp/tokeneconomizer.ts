@@ -108,8 +108,8 @@ async function hook(payload: Record<string, unknown>, mode: string): Promise<any
 
 /** A notice in the UI; on stderr in print and JSON modes, which have no UI and keep stdout for
  * the reply and the event stream. A sub session has no person to notify, so it stays silent. */
-function notify(api: ExtensionAPI, ctx: ExtensionContext, text: unknown) {
-  if (api.agent.kind !== "main") return;
+function notify(ctx: ExtensionContext, text: unknown) {
+  if (ctx.agent.kind !== "main") return;
   if (typeof text !== "string" || !text) return;
   if (ctx.hasUI) ctx.ui.notify(text, "info");
   else console.error(text);
@@ -156,7 +156,7 @@ export default function tokeneconomizer(api: ExtensionAPI) {
       const drop = new Set(deny);
       await api.setActiveTools(api.getActiveTools().filter((n) => !drop.has(n))).catch(() => {});
     }
-    notify(api, ctx, out?.systemMessage);
+    notify(ctx, out?.systemMessage);
   };
 
   api.on("session_start", async (_event, ctx) => {
@@ -196,7 +196,7 @@ export default function tokeneconomizer(api: ExtensionAPI) {
     if (extra) {
       manual = manual ? `${manual}\n\n${extra}` : extra;
     }
-    notify(api, ctx, out?.systemMessage);
+    notify(ctx, out?.systemMessage);
     if (!manual) return;
     return {
       systemPrompt: [...event.systemPrompt, `<${SECTION}>\n${manual}\n</${SECTION}>`],
@@ -229,7 +229,7 @@ export default function tokeneconomizer(api: ExtensionAPI) {
     if (nudge) {
       api.sendMessage({ customType: SECTION, content: nudge, display: true }, { deliverAs: "steer" });
     }
-    notify(api, ctx, out?.systemMessage);
+    notify(ctx, out?.systemMessage);
   });
 
   api.on("agent_end", async (_event, ctx) => {
@@ -254,7 +254,7 @@ export default function tokeneconomizer(api: ExtensionAPI) {
       const out = await run("te", ["--host", "omp", "--cwd", ctx.cwd, ...argv], "", ctx.mode, {
         TE_SESSION_ID: ctx.sessionManager.getSessionId(),
       });
-      notify(api, ctx, out.trim() || "te: no output (is Python 3.10+ on PATH?)");
+      notify(ctx, out.trim() || "te: no output (is Python 3.10+ on PATH?)");
     },
   });
 }
