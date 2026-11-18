@@ -70,7 +70,7 @@ mechanisms:
 
 TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**,
 with experimental support for **opencode**, **Cursor Agent**, **Grok Build**, **Hermes Agent**,
-the **Antigravity CLI** and **Factory Droid**. Each italic
+the **Antigravity CLI**, **oh-my-pi (`omp`)** and **Factory Droid**. Each italic
 letter above is a setting, shown with its default ([Settings](#settings)), and each mechanism can be turned on or
 off. The plugin announces each action in one line, and if any part of it fails, your session
 carries on as if it were not installed. Its model calls (the fact proposer, and the judge with the

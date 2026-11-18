@@ -327,6 +327,27 @@ settings would be):
 * Not yet exercised: `pi install git:github.com/…` against GitHub itself, which needs the
   root manifest pushed.
 
+**oh-my-pi 18.22.2 — verified live, 2026-11-18:**
+
+* `omp` loaded the extension its `omp` manifest key names, `plugin/omp/tokeneconomizer.ts`,
+  from `@oh-my-pi/pi-coding-agent` (a type-only import, so the installed package needs no
+  dependency).
+* Like Pi, omp has no hook protocol: `session_start`, `session_switch`, `before_agent_start`,
+  `tool_result`, `agent_end` and `session_shutdown` each become one `te-hook --host omp` call,
+  with a `prompt_id` the extension numbers itself.
+* `SessionStart` answers with the learned manual as `additionalContext` and, only there, the
+  tools to remove; the extension removes them from the active set with `setActiveTools`, from
+  the plugin's own state, and never writes an omp settings file.
+* omp keeps only a digest of its system prompt, so the extension re-sends the manual as a
+  `<tokeneconomizer>` block on every `before_agent_start`; the returned `systemPrompt`
+  replaces the array for the next request and its continuations.
+* A bash `tool_result` carries the command's exit code in `details.exitCode`, which reaches the
+  dispatcher as `tool_response.exit_code`; a redirect is delivered as a steer message, and a
+  still-stuck notice goes to `ui.notify` only when `api.agent.kind` is `"main"`, so a sub
+  session shows none.
+* The plugin's own calls run `omp -p`.
+* The above was checked on 18.22.2 against recorded sessions and a live smoke.
+
 **opencode 1.19.5 and 2.2.0 — verified live, 2026-10-29** (scripted local model endpoint; on
 1.19.5 also the free `opencode/big-pickle`; the 2.x entry also runs against 2.2.5 in CI):
 

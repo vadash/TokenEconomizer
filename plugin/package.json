@@ -16,6 +16,11 @@
       "./pi/tokeneconomizer.ts"
     ]
   },
+  "omp": {
+    "extensions": [
+      "./omp/tokeneconomizer.ts"
+    ]
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   }

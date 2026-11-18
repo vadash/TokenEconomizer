@@ -655,12 +655,37 @@ def test_the_plugin_directory_is_also_a_pi_package():
     (root_ext,) = root["pi"]["extensions"]
     assert os.path.realpath(os.path.join(os.path.dirname(PLUGIN), root_ext)) == \
         os.path.realpath(os.path.join(PLUGIN, ext))
-    assert {k: v for k, v in root.items() if k != "pi"} == {k: v for k, v in pkg.items()
-                                                           if k != "pi"}
+    # `omp` names its own extension path in each package, so those two entries differ by the
+    # directory they are read from; every other field must match.
+    assert {k: v for k, v in root.items() if k not in ("pi", "omp")} == \
+        {k: v for k, v in pkg.items() if k not in ("pi", "omp")}
     # no lockfile: Claude Code installs a plugin's npm dependencies only when one exists,
     # and this package has none to install (the Pi API is a peer dependency)
     assert not any(os.path.exists(os.path.join(PLUGIN, f)) for f in
                    ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"))
+
+
+def test_the_omp_manifest_names_its_own_extension():
+    """oh-my-pi has no plugin directory: its manifest names a TypeScript extension that speaks
+    the dispatcher's protocol. The root package and the plugin directory must name the same
+    file, and that file must carry the levers omp exposes (tool deny list, system prompt, steer
+    message, slash command) and only the six events the host contract uses."""
+    pkg = _json(PLUGIN, "package.json")
+    root = _json(os.path.dirname(PLUGIN), "package.json")
+    (plugin_ext,) = pkg["omp"]["extensions"]
+    (root_ext,) = root["omp"]["extensions"]
+    path = os.path.join(PLUGIN, plugin_ext)
+    assert os.path.realpath(os.path.join(os.path.dirname(PLUGIN), root_ext)) == \
+        os.path.realpath(path)
+    assert os.path.isfile(path)
+    src = open(path, encoding="utf-8").read()
+    assert 'import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";' in src
+    assert '"te-hook", ["--host", "omp"]' in src
+    assert "setActiveTools" in src and "denyTools" in src
+    assert 'registerCommand("te"' in src
+    assert set(re.findall(r'\.on\("(\w+)"', src)) == {
+        "session_start", "session_switch", "before_agent_start", "tool_result", "agent_end",
+        "session_shutdown"}
 
 
 @pytest.mark.skipif(not os.path.islink(os.path.join(PLUGIN, "lib", "tokeneconomizer")),
