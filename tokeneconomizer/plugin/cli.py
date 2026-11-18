@@ -1,5 +1,6 @@
 """`te` -- inspect and steer what TokenEconomizer does in your sessions.
 
+    te help                           this list of subcommands, one line each
     te status                         what it has learned for this repository, and what it did
     te status --explain               explain the current settings and saved learning state
     te microskills                    the facts it injects, and the ones still forming
@@ -41,6 +42,7 @@
                                       deny list save (makes model calls; see plugin/probe.py)
 
 `te facts` and `te untool` are the earlier names of `microskills` and `toolprune`, and still work.
+With no subcommand, `te` prints the same list as `te help`.
 `--cwd` picks the repository (default: the current directory) and `--host` the agent
 (claude | codex | copilot | pi; default: `TE_HOST`, else the agent whose shell runs `te`, else
 claude).
@@ -993,6 +995,31 @@ def cmd_doctor(args):
     return 0 if ok else 1
 
 
+# ---- help ----------------------------------------------------------------------------------
+# One line per user-facing subcommand: name, key argument, what it does. The plumbing a person
+# never types (fold, judge, probe) stays out; a test checks every name against the parser, so
+# this list cannot name a command that `te` does not accept.
+_HELP = (
+    ("status", "", "what TokenEconomizer learned here and did"),
+    ("microskills", "", "the facts it injects"),
+    ("toolprune", "[show|apply|restore]", "the proposed deny list"),
+    ("config", "[show|set|unset]", "turn mechanisms on/off"),
+    ("repos", "[list|migrate|merge]", "every repository with state here"),
+    ("history", "[status|import]", "sessions from before the plugin"),
+    ("repomap", "[show|refresh]", "the cached repository map"),
+    ("doctor", "", "check the installation"),
+)
+
+
+def help_lines():
+    return [f"{name}{f' {arg}' if arg else ''} \u2014 {about}" for name, arg, about in _HELP]
+
+
+def cmd_help(args):
+    print("\n".join(help_lines()))
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="te", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1003,11 +1030,13 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cwd", default=argparse.SUPPRESS)
     common.add_argument("--host", default=argparse.SUPPRESS, choices=sorted(hosts.HOSTS))
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
+    ap.set_defaults(fn=cmd_help)  # bare `te` prints the list, as `te help` does
 
     def add(name, *aliases):
         return sub.add_parser(name, aliases=list(aliases), parents=[common])
 
+    add("help").set_defaults(fn=cmd_help)
     p = add("status")
     p.add_argument("--json", action="store_true")
     p.add_argument("--explain", action="store_true",
