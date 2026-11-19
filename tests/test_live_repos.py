@@ -614,7 +614,7 @@ def test_a_change_where_the_state_is_read_only_is_refused_whole(tmp_path, env, m
     out = capsys.readouterr().out
     assert out.count("not changed: TokenEconomizer cannot write its state") == 2
     assert "Traceback" not in out
-    assert denylist.applied_for(st, repo_dir) == []
+    assert denylist.applied_for(st) == []
     assert not os.path.exists(os.path.join(os.path.dirname(st.base), "config.json"))
     # ... and reading still works there
     assert cli.main(["--host", "omp", "--cwd", repo_dir, "toolprune"]) == 0

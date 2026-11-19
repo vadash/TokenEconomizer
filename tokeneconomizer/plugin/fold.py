@@ -221,7 +221,6 @@ def apply_pending(ctx, now=None):
         pend = unt.get("auto_pending")
         if not pend:
             return None
-        root = pend.get("root") or ctx.repo.root
         done = set(denylist.applied_for(ctx.store))
         done |= set(denylist.kept_for(ctx.store))
         items = unprotected(ctx, [t for t in pend.get("items") or [] if t not in done])
