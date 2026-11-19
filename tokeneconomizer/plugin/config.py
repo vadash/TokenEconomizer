@@ -50,17 +50,16 @@ person can tune by hand:
                                    `paid_model`;
   * omp_cli                     -- the `omp` the plugin's own model calls run.
 
-The names before the mechanisms were renamed are read too, so an existing config file keeps
-working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
-settings (`inject_max_facts`, `untool_evidence`, `spiral.<name>`, ...) and environment variables
-(`TE_INJECT`, ...), and the value `guard` for `stop`. Writing a setting stores its new name.
+Old names from before the mechanisms were renamed are not read. A file holding `spiral`,
+`inject_max_facts` or another old name loads with an unknown-key warning for each, and keeps
+its default. `te config set` refuses an old name with an unknown-key error. `te facts` and
+`te untool` are unknown commands.
 
 Sources, lowest precedence first: built-in defaults, `<root>/config.json`, the repository's
 `config.json`, then environment variables (`TE_MICROSKILLS`, `TE_TOOLPRUNE`, `TE_LOOPGUARD`,
 `TE_MODE`, `TE_SHADOW`, `TE_DISABLE`, and one per setting; `TE_LOOPGUARD_THRESHOLDS` takes
-JSON). Within one source a new name wins over its old one. An invalid value is ignored with
-a warning recorded in the result rather than raised: a typo in a config file must not break the
-agent's hooks.
+JSON). An invalid value is ignored with a warning recorded in the result rather than raised:
+a typo in a config file must not break the agent's hooks.
 """
 import json
 import math
@@ -79,42 +78,8 @@ ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard
             "repomap": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
-# Values renamed with their mechanism.
-_VALUE_ALIASES = {"loopguard": {"guard": "stop"}}
+_THRESHOLD_PREFIXES = ("loopguard.",)
 
-# Setting names from before the mechanisms were renamed: old -> new.
-ALIASES = {
-    "inject": "microskills",
-    "inject_max_facts": "microskills_max_facts",
-    "inject_max_tokens": "microskills_max_tokens",
-    "propose_every": "microskills_propose_every",
-    "untool": "toolprune",
-    "untool_evidence": "toolprune_evidence",
-    "spiral": "loopguard",
-    "spiral_aggr": "loopguard_aggr",
-    "spiral_nudges": "loopguard_nudges",
-    "spiral_thresholds": "loopguard_thresholds",
-}
-_THRESHOLD_PREFIXES = ("loopguard.", "spiral.")
-
-# Settings that no longer exist, and where what they did went. A config file that still has one
-# is read without complaint; `config set` says why it is refused.
-OBSOLETE = {
-    "paid": "the loop guard always asks its judge (`loopguard=off` turns it off), and "
-            "micro-skills' proposer runs whenever micro-skills is on (`microskills=envfacts` "
-            "keeps only the facts that need no model call)",
-    **{f"{h}_paid_model": "omp is the only host; use `omp_paid_model` or `paid_model`"
-       for h in ("claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes",
-                 "droid")},
-    **{k: "omp is the only host; the plugin's own calls take no effort setting"
-       for k in ("claude_paid_effort", "codex_paid_effort")},
-    **{k: "no on-device model: the on-device judge was macOS-only"
-       for k in ("local_model", "local_roles", "local_judge_confidence")},
-    **{k: "omp is the only host"
-       for k in ("pi_extensions", "pi_cli", "hermes_cli", "droid_sidecall")},
-    **{k: "omp keeps no session history the plugin reads"
-       for k in ("history_import", "history_max_sessions", "history_days", "history_dirs")},
-}
 
 # The loop guard's thresholds a person may pin (`loopguard.<name>=<value>`), with their type
 # and range. They are the keys of `loopguard.DEFAULT_THRESHOLDS`; a turn's "turns" are its tool
@@ -135,17 +100,8 @@ LOOPGUARD_KEYS = {
     "gate_error_outputs": (int, 1, None, "failing results that wake the judge without a repeat"),
 }
 
-
-def canonical(key):
-    """A setting's current name: `inject` -> `microskills`, `spiral.x` -> `loopguard.x`."""
-    for prefix in _THRESHOLD_PREFIXES:
-        if key.startswith(prefix):
-            return "loopguard." + key[len(prefix):]
-    return ALIASES.get(key, key)
-
-
 def _threshold_name(key):
-    """`min_turns` for `loopguard.min_turns` (or the old `spiral.min_turns`), else None."""
+    """`min_turns` for `loopguard.min_turns`, else None."""
     for prefix in _THRESHOLD_PREFIXES:
         if key.startswith(prefix):
             return key[len(prefix):]
@@ -197,9 +153,6 @@ class LiveConfig:
         name = _threshold_name(key)
         if name is not None:
             return self._set_threshold(name, value, source)
-        key = canonical(key)
-        if key in OBSOLETE:
-            return True
         names = {f.name: f for f in fields(self) if f.name != "warnings"}
         if key not in names:
             self.warnings.append(f"{source}: unknown key {key!r}")
@@ -215,8 +168,6 @@ class LiveConfig:
                 value = ON_VALUE[key]
             elif word in _OFF:
                 value = "off"
-            else:
-                value = _VALUE_ALIASES.get(key, {}).get(word, value)
         cur = getattr(self, key)
         try:
             if isinstance(cur, list):
@@ -279,16 +230,10 @@ class LiveConfig:
         return True
 
 
-# Environment variables, old names first so that a new name set alongside its old one wins.
+# Environment variables, one per setting.
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
         "TE_OMP_PAID_MODEL": "omp_paid_model",
-        "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
-        "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
-        "TE_PROPOSE_EVERY": "microskills_propose_every",
-        "TE_UNTOOL": "toolprune", "TE_UNTOOL_EVIDENCE": "toolprune_evidence",
-        "TE_SPIRAL": "loopguard", "TE_SPIRAL_AGGR": "loopguard_aggr",
-        "TE_SPIRAL_NUDGES": "loopguard_nudges",
         "TE_MICROSKILLS": "microskills", "TE_MICROSKILLS_MAX_FACTS": "microskills_max_facts",
         "TE_MICROSKILLS_MAX_TOKENS": "microskills_max_tokens",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
@@ -302,7 +247,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
         "TE_OMP_CLI": "omp_cli"}
-_ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
+_ENV_THRESHOLDS = ("TE_LOOPGUARD_THRESHOLDS",)
 
 
 def _read(path):
@@ -314,11 +259,6 @@ def _read(path):
         return {}
 
 
-def _old_names_first(items):
-    """A file's settings with every old name before every new one, so the new one wins."""
-    return sorted(items, key=lambda kv: canonical(kv[0]) == kv[0])
-
-
 def load_config(root, repo_dir=None, env=None):
     """Merge defaults, the global file, the repository file and the environment."""
     env = os.environ if env is None else env
@@ -326,7 +266,7 @@ def load_config(root, repo_dir=None, env=None):
     for label, path in (("global", os.path.join(root, "config.json")),
                         ("repo", os.path.join(repo_dir, "config.json") if repo_dir else None)):
         if path:
-            for k, v in _old_names_first(_read(path).items()):
+            for k, v in _read(path).items():
                 cfg.set(k, v, source=f"{label} {path}")
     for var, key in _ENV.items():
         if env.get(var) not in (None, ""):
@@ -346,66 +286,43 @@ def load_config(root, repo_dir=None, env=None):
     return cfg
 
 
-def _drop_old_names(current, key):
-    """Remove every old spelling of `key` from a config file's contents."""
-    for old, new in ALIASES.items():
-        if new == key:
-            current.pop(old, None)
-
-
 def write_config(path, updates):
     """Merge `updates` into the JSON config at `path` (validating each key first), under the
     settings' current names. A `loopguard.<name>` key lands in `loopguard_thresholds`."""
-    gone = [k for k in updates if canonical(k) in OBSOLETE]
-    if gone:
-        raise ValueError("; ".join(f"`{k}` no longer exists: {OBSOLETE[canonical(k)]}"
-                                   for k in gone))
     probe = LiveConfig()
     bad = [k for k, v in updates.items() if not probe.set(k, v, source="te config")]
     if bad:
         raise ValueError("; ".join(probe.warnings))
     current = _read(path)
-    # an old file's thresholds move to the new name, so nothing pinned is lost
-    if "spiral_thresholds" in current:
-        old = current.pop("spiral_thresholds")
-        if isinstance(old, dict):
-            current["loopguard_thresholds"] = dict(old, **current.get("loopguard_thresholds")
-                                                   or {})
     for k in updates:
         name = _threshold_name(k)
-        key = canonical(k)
         if name is not None:
             current.setdefault("loopguard_thresholds", {})[name] = \
                 probe.loopguard_thresholds[name]
-        elif key == "loopguard_thresholds":
+        elif k == "loopguard_thresholds":
             current.setdefault("loopguard_thresholds", {}).update(probe.loopguard_thresholds)
         else:
-            _drop_old_names(current, key)
-            current[key] = getattr(probe, key)
+            current[k] = getattr(probe, k)
     _write(path, current)
     return current
 
 
 def unset_config(path, keys):
-    """Remove keys (by either name) from the JSON config at `path`, so the next source down
-    applies again. `loopguard.<name>` removes one threshold; `loopguard_thresholds` all."""
+    """Remove keys from the JSON config at `path`, so the next source down applies again.
+    `loopguard.<name>` removes one threshold; `loopguard_thresholds` all."""
     known = {f.name for f in fields(LiveConfig) if f.name != "warnings"}
-    bad = [k for k in keys if canonical(k) not in known and _threshold_name(k) not in
-           LOOPGUARD_KEYS]
+    bad = [k for k in keys if k not in known and _threshold_name(k) not in LOOPGUARD_KEYS]
     if bad:
         raise ValueError(f"unknown key(s): {', '.join(bad)}")
     current = _read(path)
     for k in keys:
         name = _threshold_name(k)
         if name is not None:
-            for table in ("loopguard_thresholds", "spiral_thresholds"):
-                (current.get(table) or {}).pop(name, None)
-                if not current.get(table):
-                    current.pop(table, None)
+            (current.get("loopguard_thresholds") or {}).pop(name, None)
+            if not current.get("loopguard_thresholds"):
+                current.pop("loopguard_thresholds", None)
         else:
-            key = canonical(k)
-            current.pop(key, None)
-            _drop_old_names(current, key)
+            current.pop(k, None)
     _write(path, current)
     return current
 

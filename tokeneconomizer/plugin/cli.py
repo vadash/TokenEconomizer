@@ -33,10 +33,9 @@
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
     te doctor                         check the installation
-    te --host omp probe               not available: the session probe needs another agent's
+    te --host omp probe             not available: the session probe needs another agent's
                                       session logs
 
-`te facts` and `te untool` are the earlier names of `microskills` and `toolprune`, and still work.
 With no subcommand, `te` prints the same list as `te help`.
 `--cwd` picks the repository (default: the current directory) and `--host` the agent (omp,
 the only one).
@@ -53,7 +52,7 @@ import time
 
 from .. import loopguard
 from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall)
-from .config import LiveConfig, canonical, unset_config, write_config
+from .config import LiveConfig, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
 
@@ -294,21 +293,20 @@ def cmd_status(args):
 
 
 def _config_names(path, key):
-    """Whether the config file at `path` names `key` under its current or an old spelling."""
+    """Whether the config file at `path` names `key`."""
     try:
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
     except (OSError, ValueError):
         return False
-    return isinstance(doc, dict) and any(canonical(k) == key for k in doc)
+    return isinstance(doc, dict) and key in doc
 
 
 def _microskills_origin(ctx):
     """Where this repository's effective microskills value comes from, in config merge order:
     the environment, then the repository's config, then the global one, else the default."""
-    for var in ("TE_MICROSKILLS", "TE_INJECT"):
-        if ctx.env.get(var):
-            return f"environment {var}"
+    if ctx.env.get("TE_MICROSKILLS"):
+        return "environment TE_MICROSKILLS"
     for label, path in (("repo config", os.path.join(os.path.dirname(ctx.store.base),
                                                      "config.json")),
                         ("global config", os.path.join(ctx.root, "config.json"))):
@@ -685,7 +683,7 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
-    if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
+    if set(updates) & {"microskills", "loopguard"} and sidecall.resume(
             ctx.host.name, ctx.root):
         print(f"the plugin's model calls through `{sidecall.call_name(ctx.host.name)}` will be "
               f"tried again")
@@ -932,17 +930,13 @@ def build_parser():
 
     add("help").set_defaults(fn=cmd_help)
     p = add("status")
-    p.add_argument("--json", action="store_true")
-    p.add_argument("--explain", action="store_true",
-                   help="briefly explain current settings and saved state (no model calls)")
-    p.set_defaults(fn=cmd_status)
-    p = add("microskills", "facts")
+    p = add("microskills")
     p.add_argument("action", nargs="?", default="show", choices=("show", "forget", "unforget"),
                    help="show the facts (default); forget: stop injecting them and never learn "
                         "them again; unforget: bring forgotten facts back")
     p.add_argument("ids", nargs="*", metavar="ID", help="fact ids, as `te microskills` lists them")
     p.set_defaults(fn=cmd_microskills)
-    p = add("toolprune", "untool")
+    p = add("toolprune")
     p.add_argument("action", nargs="?", default="show",
                    choices=("show", "apply", "restore", "refresh-catalog", "measure",
                             "apply-pending"))

@@ -94,16 +94,15 @@ def test_config_layers_and_never_raises_on_bad_values(tmp_path):
     repo_dir = os.path.join(root, "repos", "r")
     os.makedirs(repo_dir)
     with open(os.path.join(root, "config.json"), "w") as fh:
-        # names from before the mechanisms were renamed: still read
-        json.dump({"spiral": "guard", "untool_evidence": 7, "bogus": 1}, fh)
+        json.dump({"loopguard": "guard", "toolprune_evidence": 7, "bogus": 1}, fh)
     with open(os.path.join(repo_dir, "config.json"), "w") as fh:
-        json.dump({"spiral": "nope", "inject": "envfacts+distiller"}, fh)
-    cfg = live_config.load_config(root, repo_dir=repo_dir, env={"TE_UNTOOL": "auto"})
-    assert cfg.loopguard == "stop"                # the invalid repo value is ignored
+        json.dump({"loopguard": "nope", "microskills": "envfacts+distiller"}, fh)
+    cfg = live_config.load_config(root, repo_dir=repo_dir, env={"TE_TOOLPRUNE": "auto"})
+    assert cfg.loopguard == "nudge"                # invalid values are ignored
     assert cfg.toolprune_evidence == 7 and cfg.toolprune == "auto"
-    assert cfg.microskills == "envfacts+distiller"     # its proposer needs no `paid`
+    assert cfg.microskills == "envfacts+distiller"
     joined = " ".join(cfg.warnings)
-    assert "bogus" in joined and "nope" in joined and "paid" not in joined
+    assert "bogus" in joined and "nope" in joined and "guard" in joined
     assert live_config.load_config(root, env={"TE_DISABLE": "1"}).enabled is False
 
 
@@ -111,13 +110,13 @@ def test_write_config_validates_before_writing(tmp_path):
     path = str(tmp_path / "config.json")
     live_config.write_config(path, {"loopguard": "off", "paid_model": "haiku"})
     assert json.load(open(path)) == {"loopguard": "off", "paid_model": "haiku"}
-    with pytest.raises(ValueError, match="always asks its judge"):
+    with pytest.raises(ValueError, match="unknown key 'paid'"):
         live_config.write_config(path, {"paid": "true"})          # gone: refused, and why
     assert "paid" not in json.load(open(path))
     with open(path, "w") as fh:
-        json.dump({"paid": True, "loopguard": "off"}, fh)          # an old file still reads
+        json.dump({"paid": True, "loopguard": "off"}, fh)          # an old file warns
     cfg = live_config.load_config(str(tmp_path), repo_dir=None, env={})
-    assert not cfg.warnings
+    assert cfg.loopguard == "off" and any("paid" in w for w in cfg.warnings)
     with pytest.raises(ValueError):
         live_config.write_config(path, {"loopguard": "sometimes"})
     assert json.load(open(path))["loopguard"] == "off"

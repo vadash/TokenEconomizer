@@ -74,39 +74,36 @@ def test_the_repository_file_beats_the_global_one_and_the_environment_beats_both
     assert not cfg.warnings
 
 
-def test_the_names_before_the_rename_still_work(tmp_path):
-    """`inject`, `untool`, `spiral` and their settings and variables are read as the new names;
-    a file holding both spellings takes the new one; writing a setting stores its new name and
-    drops the old spelling; unsetting by either name removes both."""
-    root, repo_dir = tmp_path / "root", tmp_path / "repo"
+def test_old_names_are_unknown_keys(tmp_path):
+    """Old names died with the rename: a file holding `spiral` or `inject_max_facts` loads
+    with an unknown-key warning for each and keeps its defaults; `set`, `write_config` and
+    `unset_config` refuse them; a removed environment variable changes nothing."""
+    root = tmp_path / "root"
     os.makedirs(root)
     with open(root / "config.json", "w") as fh:
-        json.dump({"loopguard": "off", "spiral": "guard", "inject_max_facts": 3,
-                   "untool": "auto", "propose_every": 7, "spiral_aggr": "aggressive",
-                   "spiral_thresholds": {"min_turns": 9}}, fh)
-    cfg = load_config(str(root), str(repo_dir), env={
-        "TE_SPIRAL_NUDGES": "2", "TE_UNTOOL_EVIDENCE": "4", "TE_INJECT": "off"})
-    assert cfg.loopguard == "off"                       # the new name wins in one file
-    assert (cfg.microskills_max_facts, cfg.toolprune, cfg.microskills_propose_every,
-            cfg.loopguard_aggr) == (3, "auto", 7, "aggressive")
-    assert cfg.loopguard_thresholds == {"min_turns": 9}
-    assert (cfg.loopguard_nudges, cfg.toolprune_evidence, cfg.microskills) == (2, 4, "off")
-    assert not cfg.warnings
-    # a new variable beats its old spelling
-    assert load_config(str(root), env={"TE_SPIRAL": "nudge",
-                                       "TE_LOOPGUARD": "stop"}).loopguard == "stop"
-    assert LiveConfig().set("spiral", "guard") and LiveConfig().set("loopguard", "guard")
+        json.dump({"spiral": "nudge", "inject_max_facts": 3}, fh)
+    cfg = load_config(str(root), env={})
+    assert (cfg.loopguard, cfg.microskills_max_facts) == ("nudge", 4)
+    assert len(cfg.warnings) == 2 and all("unknown key" in w for w in cfg.warnings)
+    assert "spiral" in " ".join(cfg.warnings) and "inject_max_facts" in " ".join(cfg.warnings)
+    assert not LiveConfig().set("spiral", "nudge")
+    assert not LiveConfig().set("spiral.min_turns", "9")
     path = str(root / "config.json")
-    write_config(path, {"spiral": "nudge", "spiral.edit_churn": "5"})
-    written = json.load(open(path))
-    assert written["loopguard"] == "nudge" and "spiral" not in written
-    assert written["loopguard_thresholds"] == {"min_turns": 9, "edit_churn": 5}
-    assert "spiral_thresholds" not in written
-    unset_config(path, ["untool", "inject_max_facts", "spiral.min_turns"])
-    written = json.load(open(path))
-    assert "untool" not in written and "toolprune" not in written
-    assert "inject_max_facts" not in written
-    assert written["loopguard_thresholds"] == {"edit_churn": 5}
+    with pytest.raises(ValueError, match="unknown key 'spiral'"):
+        write_config(path, {"spiral": "nudge"})
+    with pytest.raises(ValueError, match="unknown key"):
+        unset_config(path, ["untool"])
+    assert json.load(open(path)) == {"spiral": "nudge", "inject_max_facts": 3}
+    assert load_config(str(root),
+                       env={"TE_INJECT": "off", "TE_SPIRAL": "nudge"}).microskills == "off"
+
+
+def test_loopguard_guard_is_an_invalid_choice_and_keeps_its_typed_value(tmp_path):
+    """`guard` was the old word for `stop`; it is now refused as an invalid choice."""
+    cfg = LiveConfig()
+    assert not cfg.set("loopguard", "guard")
+    assert cfg.loopguard == "nudge"
+    assert any("not one of" in w for w in cfg.warnings)
 
 
 def test_the_fact_caps_default_to_the_cores_own():
@@ -163,13 +160,13 @@ def test_a_guard_turned_off_in_the_repository_file_never_intervenes(env, repo):
     _warm(env, repo)
     path = os.path.join(repo_state_dir(repo_identity(repo, env), "omp", env), "..",
                         "config.json")
-    write_config(os.path.normpath(path), {"spiral": "off"})
+    write_config(os.path.normpath(path), {"loopguard": "off"})
     assert all(o == {} for o in _turn(env, repo, "s", "stuck", stuck_calls(40)))
 
 
 def test_more_redirects_are_given_before_the_notice_when_asked_for(env, repo):
     _warm(env, repo)
-    outs = _turn(dict(env, TE_SPIRAL_NUDGES="2"), repo, "s", "stuck", stuck_calls(60))
+    outs = _turn(dict(env, TE_LOOPGUARD_NUDGES="2"), repo, "s", "stuck", stuck_calls(60))
     msgs = _messages(outs)
     nudges = [i for i, m in enumerate(msgs) if "nudged" in m]
     notice = _first(msgs, lambda m: "still looks stuck" in m)
@@ -178,7 +175,7 @@ def test_more_redirects_are_given_before_the_notice_when_asked_for(env, repo):
 
 def test_a_higher_min_turns_holds_the_guard_back(env, repo):
     _warm(env, repo)
-    outs = _turn(dict(env, TE_SPIRAL_THRESHOLDS='{"min_turns": 80}'), repo, "s", "stuck",
+    outs = _turn(dict(env, TE_LOOPGUARD_THRESHOLDS='{"min_turns": 80}'), repo, "s", "stuck",
                  stuck_calls(40))
     assert all(o == {} for o in outs)                    # default thresholds nudge this turn
 
@@ -189,20 +186,18 @@ def test_injection_off_and_a_tight_fact_cap_keep_the_context_clean(env, repo, tm
     off = run_session(dict(env, TE_MICROSKILLS="off"), repo, "s4",
                       trap_session(str(tmp_path / "s4.jsonl"), repo, 4))
     assert "hookSpecificOutput" not in off and "systemMessage" not in off
-    tight = dict(env, TE_INJECT_MAX_TOKENS="5")          # smaller than the block's header
+    tight = dict(env, TE_MICROSKILLS_MAX_TOKENS="5")          # smaller than the block's header
     run_session(tight, repo, "s5", trap_session(str(tmp_path / "s5.jsonl"), repo, 5))
     after = run_session(tight, repo, "s6", trap_session(str(tmp_path / "s6.jsonl"), repo, 6))
     assert "hookSpecificOutput" not in after
 
 
 def test_loopguard_stop_is_still_read_and_acts_as_nudge_with_a_warning(tmp_path):
-    """`stop` once stopped a headless turn on Claude Code and Pi; the plugin no longer stops a
-    turn on any agent, so an existing `stop` (or the old `spiral=guard`) keeps working as the
-    redirect-then-notice ladder, and says so."""
-    for env in ({"TE_LOOPGUARD": "stop"}, {"TE_SPIRAL": "guard"}):
-        cfg = load_config(str(tmp_path), env=env)
-        assert cfg.loopguard == "stop"
-        assert any("loopguard=stop acts as nudge" in w for w in cfg.warnings)
+    """`stop` once stopped a headless turn; the plugin no longer stops a turn on any agent,
+    so an existing `stop` keeps working as the redirect-then-notice ladder, and says so."""
+    cfg = load_config(str(tmp_path), env={"TE_LOOPGUARD": "stop"})
+    assert cfg.loopguard == "stop"
+    assert any("loopguard=stop acts as nudge" in w for w in cfg.warnings)
     assert not load_config(str(tmp_path), env={"TE_LOOPGUARD": "nudge"}).warnings
 
 

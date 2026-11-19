@@ -282,19 +282,16 @@ def test_the_plugin_carries_the_core_an_install_copy_follows(tmp_path):
         assert out.returncode == 1 and "was not found" in out.stderr
 
 
-def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
-    """`te facts` / `te untool` were the names before the mechanisms were renamed; they run
-    exactly what `microskills` / `toolprune` run."""
+def test_the_old_command_names_are_unknown(tmp_path, capsys):
+    """`te facts` / `te untool` were the names before the mechanisms were renamed; the parser
+    no longer accepts them."""
     from tokeneconomizer.plugin import cli
-    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
-    work = tmp_path / "work"
-    work.mkdir()
-    for new, old in (("microskills", "facts"), ("toolprune", "untool")):
-        outs = []
-        for name in (new, old):
-            assert cli.main(["--cwd", str(work), "--host", "omp", name]) == 0
-            outs.append(capsys.readouterr().out)
-        assert outs[0] == outs[1] and outs[0]
+    choices = cli.build_parser()._subparsers._group_actions[0].choices
+    assert "facts" not in choices and "untool" not in choices
+    for old in ("facts", "untool"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["--cwd", str(tmp_path), "--host", "omp", old])
+        assert exc.value.code == 2
 
 
 def test_toolprune_note_after_a_reported_catalog(tmp_path, monkeypatch, capsys):

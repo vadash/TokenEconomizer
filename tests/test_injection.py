@@ -82,8 +82,7 @@ def test_microskills_progress_counts_only_sessions_folded_while_it_was_on(
     repo.mkdir()
     env = {"TOKENECONOMIZER_HOME": str(tmp_path / "home"),
            "GIT_CEILING_DIRECTORIES": str(tmp_path)}
-    for var in ("TE_MICROSKILLS", "TE_INJECT"):
-        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("TE_MICROSKILLS", raising=False)
     ctx = LiveContext.build(hosts.Omp(), str(repo), env, settle=False)
     ctx.store.ensure()
     repo_dir = os.path.dirname(ctx.store.base)

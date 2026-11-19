@@ -13,11 +13,10 @@ INTEGER_SETTINGS = [key for key, value in LiveConfig().as_dict().items() if type
 
 
 @pytest.mark.parametrize("name", INTEGER_THRESHOLDS)
-@pytest.mark.parametrize("prefix", ["loopguard", "spiral"])
-def test_fractional_numeric_count_is_rejected_without_changing_the_previous_value(name, prefix):
+def test_fractional_numeric_count_is_rejected_without_changing_the_previous_value(name):
     cfg = LiveConfig()
-    assert cfg.set(f"{prefix}.{name}", 8)
-    assert not cfg.set(f"{prefix}.{name}", 12.5)
+    assert cfg.set(f"loopguard.{name}", 8)
+    assert not cfg.set(f"loopguard.{name}", 12.5)
     assert cfg.loopguard_thresholds[name] == 8
     assert cfg.warnings
 
