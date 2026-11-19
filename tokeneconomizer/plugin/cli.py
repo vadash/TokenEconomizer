@@ -930,6 +930,10 @@ def build_parser():
 
     add("help").set_defaults(fn=cmd_help)
     p = add("status")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--explain", action="store_true",
+                   help="briefly explain current settings and saved state (no model calls)")
+    p.set_defaults(fn=cmd_status)
     p = add("microskills")
     p.add_argument("action", nargs="?", default="show", choices=("show", "forget", "unforget"),
                    help="show the facts (default); forget: stop injecting them and never learn "

@@ -282,12 +282,10 @@ def test_the_plugin_carries_the_core_an_install_copy_follows(tmp_path):
         assert out.returncode == 1 and "was not found" in out.stderr
 
 
-def test_the_old_command_names_are_unknown(tmp_path, capsys):
+def test_the_old_command_names_are_unknown(tmp_path):
     """`te facts` / `te untool` were the names before the mechanisms were renamed; the parser
     no longer accepts them."""
     from tokeneconomizer.plugin import cli
-    choices = cli.build_parser()._subparsers._group_actions[0].choices
-    assert "facts" not in choices and "untool" not in choices
     for old in ("facts", "untool"):
         with pytest.raises(SystemExit) as exc:
             cli.main(["--cwd", str(tmp_path), "--host", "omp", old])

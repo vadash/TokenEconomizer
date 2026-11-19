@@ -94,8 +94,8 @@ def test_old_names_are_unknown_keys(tmp_path):
     with pytest.raises(ValueError, match="unknown key"):
         unset_config(path, ["untool"])
     assert json.load(open(path)) == {"spiral": "nudge", "inject_max_facts": 3}
-    assert load_config(str(root),
-                       env={"TE_INJECT": "off", "TE_SPIRAL": "nudge"}).microskills == "off"
+    removed = load_config(str(root), env={"TE_INJECT": "envfacts", "TE_SPIRAL": "off"})
+    assert (removed.microskills, removed.loopguard) == ("off", "nudge")
 
 
 def test_loopguard_guard_is_an_invalid_choice_and_keeps_its_typed_value(tmp_path):

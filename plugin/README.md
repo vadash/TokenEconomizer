@@ -233,10 +233,11 @@ you choose; in a repository left off, the plugin records nothing:
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges` and `spiral.<name>`,
-and variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; all of them are still read
-(`spiral=guard` as `loopguard=stop`, which works as `nudge`), and a new name set alongside its
-old one wins. `config set` writes the new name. The earlier commands `te facts` and `te untool`
-still work.
+and variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; none of them are read any more, and the
+value `guard` is no longer accepted for `loopguard`. A config file that still holds an old name
+loads with an unknown-key warning for each and keeps its defaults. `config set` refuses old names
+with an unknown-key error. The earlier commands `te facts` and `te untool` are unknown commands.
+Use `te microskills` and `te toolprune` instead.
 
 ## Repository map
 
