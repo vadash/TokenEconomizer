@@ -332,7 +332,7 @@ function indexPanel(help: string, cwd: string): string {
  * hyperlink) plus the same full path as plain text, since a bare path is not linked. */
 function configLink(cwd: string, global: boolean): string {
   const target = configTarget(cwd, global);
-  const note = target.exists && target.repoExists ? "" : " (not created yet — config set writes it)";
+  const note = target.exists ? "" : " (not created yet — config set writes it)";
   return `[\`config.json\`](${pathToFileURL(target.path).href})\n\n\`${target.path}\`${note}`;
 }
 

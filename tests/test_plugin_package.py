@@ -860,7 +860,7 @@ def test_toolprune_note_after_refresh_catalog(tmp_path, monkeypatch, capsys):
     (home / "hosts" / "claude" / "catalog.json").write_text("{}", encoding="utf-8")
     assert cli.main(["--cwd", str(work), "--host", "claude", "toolprune"]) == 0
     out = capsys.readouterr().out
-    assert "joins this repository's evidence from its next session" in out
+    assert "joins this repository's evidence from its next session" in " ".join(out.split())
     assert "without `te --host" not in out
 
 
