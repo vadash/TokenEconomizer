@@ -34,7 +34,6 @@ jobs:
           }
         env:
           COLUMNS: "200"
-          # The PowerShell tests (marker `powershell`) check the hook's and the slash commands'
-          # PowerShell text, and each launches PowerShell several times: one Python of the
-          # matrix runs them.
+          # The PowerShell tests (marker `powershell`) check the hook's PowerShell text, and
+          # each launches PowerShell several times: one Python of the matrix runs them.
           PYTEST_ADDOPTS: ${{ matrix.python == '3.10' && '-m "not powershell"' || '' }}

@@ -20,12 +20,10 @@ def _json(*parts):
 
 
 def test_the_plugin_ships_only_the_omp_surface():
-    """Every non-omp host's manifests, hooks, skills and extensions are gone; omp needs no
+    """Only the omp extension, the Windows launchers and the core link ship; omp needs no
     hook files (its extension calls `te-hook --host omp` itself)."""
-    for name in (".antigravity-plugin", ".claude-plugin", ".codex-plugin", ".cursor-plugin",
-                 ".factory-plugin", ".github", "codex-skills", "pi", "opencode", "hermes",
-                 "commands", "hooks.json"):
-        assert not os.path.exists(os.path.join(PLUGIN, name)), name
+    assert set(os.listdir(PLUGIN)) == {"README.md", "hooks", "lib", "omp", "package.json",
+                                       "scripts"}
     assert not [n for n in os.listdir(os.path.join(PLUGIN, "hooks")) if n.endswith(".json")]
     assert os.path.isfile(os.path.join(PLUGIN, "omp", "tokeneconomizer.ts"))
     for name in ("te_bootstrap.py", "te.cmd", "te-hook.cmd"):
@@ -33,8 +31,7 @@ def test_the_plugin_ships_only_the_omp_surface():
     for gone in ("te", "te-hook"):
         assert not os.path.exists(os.path.join(PLUGIN, "scripts", gone)), gone
     assert os.path.exists(os.path.join(PLUGIN, "lib", "tokeneconomizer"))
-    names = set(os.listdir(os.path.join(PLUGIN, "slash-commands")))
-    assert {"microskills.md", "facts.md", "toolprune.md", "untool.md"} <= names
+    assert not os.path.exists(os.path.join(PLUGIN, "slash-commands"))
 def _run_hook(launcher, payload, env, cwd=None):
     p = subprocess.run(["cmd.exe", "/c", launcher], input=json.dumps(payload),
                        capture_output=True, text=True, env=env, timeout=60, cwd=cwd or os.getcwd())
@@ -101,7 +98,7 @@ def test_the_bundle_runs_without_a_checkout(tmp_path):
     assert (bundle / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
     assert (bundle / "lib" / "tokeneconomizer" / "__init__.py").exists()
     assert (bundle / "omp" / "tokeneconomizer.ts").exists()       # the omp extension ships
-    assert not (bundle / ".claude-plugin").exists()                # no non-omp manifests ship
+    assert not [p for p in bundle.iterdir() if p.name.startswith(".")]  # no hidden manifests ship
     assert not (bundle / "lib" / "te_harness").exists()
     assert not (bundle / "lib" / "te_bench").exists()
 
@@ -178,7 +175,7 @@ def test_the_mechanisms_never_import_the_plugin_runtime():
 
 def test_the_plugin_ships_and_loads_no_benchmark_code():
     """The benchmark adapters, the facade, the workloads, the baselines and the benchmark-only
-    controllers live with the experiments (`experiments/te_bench/`). The plugin's library is the
+    controllers live outside the shipped package. The plugin's library is the
     package alone, and running every part of the plugin loads none of them."""
     shipped = os.path.join(REPO, "tokeneconomizer")       # what lib/ carries
     assert sorted(n for n in os.listdir(shipped)
@@ -286,8 +283,8 @@ def test_the_plugin_carries_the_core_an_install_copy_follows(tmp_path):
 
 
 def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
-    """`te facts` / `te untool` and `/tokeneconomizer:facts` / `:untool` were the names before
-    the mechanisms were renamed; they run exactly what `microskills` / `toolprune` run."""
+    """`te facts` / `te untool` were the names before the mechanisms were renamed; they run
+    exactly what `microskills` / `toolprune` run."""
     from tokeneconomizer.plugin import cli
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
     work = tmp_path / "work"
@@ -298,11 +295,6 @@ def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
             assert cli.main(["--cwd", str(work), "--host", "omp", name]) == 0
             outs.append(capsys.readouterr().out)
         assert outs[0] == outs[1] and outs[0]
-        body = {}
-        for name in (new, old):
-            text = open(os.path.join(PLUGIN, "slash-commands", f"{name}.md"), encoding="utf-8").read()
-            body[name] = re.search(r'"\$te" --cwd "\$\(pwd\)" (\w+)', text).group(1)
-        assert body[new] == body[old] == new
 
 
 def test_toolprune_note_after_a_reported_catalog(tmp_path, monkeypatch, capsys):

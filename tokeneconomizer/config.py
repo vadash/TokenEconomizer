@@ -103,17 +103,12 @@ class SpiralConfig:
 def needs_optimizer(config):
     """Whether ANY enabled mechanism will make a paid between-task LLM call.
 
-    The three clauses mirror `te_bench.facade.Economizer.__init__` exactly -- it resolves an
-    optimizer runner for injection when `injection.paid` (enabled AND a profile that
-    carries the paid `distiller`; the LLM-free `envfacts` profile never calls), for pruning when
-    `tooling.judge`, and for spiral when the guard is on AND it has a judge or an LLM
-    nudge writer. Kept as one predicate because callers OUTSIDE the facade need the
-    aggregate answer: a harness whose mechanism transport must be preflighted should not
-    pay for (or depend on) that probe when the arm will never call it. Arm `mode` is NOT
-    the test -- `spiral-only` and `untool-only` are `standalone` and do make paid calls.
-
-    experiments/tests/test_optimizer_basis.py asserts this agrees with the facade for every
-    arm in the registry, so the two cannot drift.
+    The three clauses resolve an optimizer runner for injection when `injection.paid`
+    (enabled AND a profile that carries the paid `distiller`; the LLM-free `envfacts`
+    profile never calls), for pruning when `tooling.judge`, and for spiral when the guard
+    is on AND it has a judge or an LLM nudge writer. Kept as one predicate because callers
+    that must preflight the mechanism transport should not pay for (or depend on) that
+    probe when nothing will ever call it.
     """
     return bool(
         config.injection.paid

@@ -2,8 +2,8 @@
  * TokenEconomizer for oh-my-pi (`omp`).
  *
  * omp has no hook protocol -- extensions are functions on its event bus -- so this extension
- * speaks the one the Claude Code and Codex integrations use, on omp's behalf: every event
- * below becomes one call of the shared dispatcher (`../scripts/te-hook --host omp`, JSON in,
+ * speaks the dispatcher's hook protocol on omp's behalf: every event
+ * below becomes one call of the shared dispatcher (`../scripts/te-hook.cmd --host omp`, JSON in,
  * JSON out), and the answer is applied with omp's own levers. All of the mechanism logic lives
  * in the dispatcher; this file only translates.
  *
@@ -18,7 +18,7 @@
  *   agent_end           -> Stop               closes the turn
  *   session_shutdown    -> SessionEnd         hands the session to a detached fold
  *
- * Like the hooks on the other agents it fails open: a dispatcher that is missing, slow or
+ * The extension fails open like any hook: a dispatcher that is missing, slow or
  * broken answers "no change". It does nothing under TE_SIDECALL=1 (the plugin's own side
  * calls) or TE_DISABLE=1. `/te <command>` runs the `te` command line for this repository and
  * shows its output in a user-only overlay panel; `/te config` shows links to the two config files
@@ -60,9 +60,9 @@ const SUBCOMMANDS = [
 
 const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 
-/** The program and arguments that run a launcher. The launchers are POSIX `sh`, which Windows
- * cannot start; there the bootstrap they run is started with Python itself (`TE_PYTHON`, else
- * `python`). */
+/** The program and arguments that run a launcher. On Windows the `.cmd` launchers run the
+ * bootstrap with Python itself (`TE_PYTHON`, else `python`); elsewhere the script runs
+ * directly. */
 export function launch(
   script: string,
   args: string[],

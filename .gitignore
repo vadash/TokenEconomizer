@@ -12,9 +12,8 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Local virtualenvs. experiments/README.md tells you to create `.venv` right here,
-# and CPython's venv only started writing a self-excluding .gitignore in 3.13 — so ignore it
-# explicitly rather than relying on the tool that happened to create it.
+# Local virtualenvs. CPython's venv only started writing a self-excluding .gitignore in
+# 3.13 — so ignore it explicitly rather than relying on the tool that happened to create it.
 .venv/
 venv/
 
@@ -26,7 +25,6 @@ runs/
 *.jsonl
 
 # Rendered figures and other local exports are never tracked.
-experiments/figures/
 *.png
 *.pdf
 *.svg

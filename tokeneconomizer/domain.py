@@ -3,7 +3,7 @@
 The mechanisms are domain-neutral; what is specific to a domain -- how its logs read, which
 tools are its work surface, which words name its interpreters and test runners -- enters only
 through these methods. The plugin's adapter is `plugin.adapter.LiveAdapter` (a real repository
-in a person's session); the benchmark adapters live in `experiments/te_bench/adapters/`.
+in a person's session).
 
   load_trajectory      -> every mechanism's view of a finished session
   tool_usage           -> the tools a session used (tool pruning's evidence)
@@ -17,7 +17,7 @@ in a person's session); the benchmark adapters live in `experiments/te_bench/ada
                           interpreters, runners, package tools, fetchers and probes
 
 Running a task and grading it is not on this protocol: that is the caller's job (the plugin's
-host hooks, or a benchmark harness).
+host hooks).
 """
 from typing import Protocol, runtime_checkable
 
