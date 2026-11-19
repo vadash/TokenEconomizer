@@ -71,18 +71,37 @@ def _microskills_config(ctx, profile):
                            max_facts=ctx.config.microskills_max_facts,
                            max_tokens=ctx.config.microskills_max_tokens)
 
+def fold_adapter(ctx, catalog=None):
+    """The one adapter a fold reads its session through. `None` loads the session's
+    catalog; pass an explicit `{}` to stay empty where there is no session."""
+    if catalog is None:
+        catalog = load_catalog(ctx.root, ctx.host.name)
+    return LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
+                       catalog=catalog, protect=ctx.config.toolprune_protect)
 
-def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
-    profile = ctx.config.microskills
-    if profile == "off":
-        return None
-    from tokeneconomizer.microskills import PrefixStage
-    icfg = _microskills_config(ctx, profile)
+
+def fold_stages(ctx, prompts=None):
+    """Which stages run for one fold, plus the paid proposer runner. Microskills runs
+    unless its profile is off; tool pruning runs unless it is off or the session ran
+    no prompt, which is no evidence about the tools."""
+    run_microskills = ctx.config.microskills != "off"
+    run_toolprune = ctx.config.toolprune != "off" and prompts != 0
+    runner = None
     # Paused once the CLI said it is not signed in (`sidecall.paused`): the free layer still
     # learns.
-    runner = None
-    if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root):
+    if (run_microskills
+            and _microskills_config(ctx, ctx.config.microskills).paid
+            and not sidecall.paused(ctx.host.name, ctx.root)):
         runner = sidecall.runner_for(ctx.host.name, ctx.config)
+    return run_microskills, run_toolprune, runner
+
+
+def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
+    run, _, runner = fold_stages(ctx)
+    if not run:
+        return None
+    from tokeneconomizer.microskills import PrefixStage
+    icfg = _microskills_config(ctx, ctx.config.microskills)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     prior = ctx.store.read("injection.json") or {}
@@ -103,8 +122,7 @@ def forget_microskills(ctx, ids, undo=False):
     raises KeyError with the unknown ids, changing nothing, and `Busy` when a fold holds the
     state longer than the lock waits."""
     from tokeneconomizer.microskills import PrefixStage, forget_facts
-    adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
-                          catalog={}, protect=ctx.config.toolprune_protect)
+    adapter = fold_adapter(ctx, catalog={})
     vocab = adapter.env_vocabulary()
     with ctx.store.locked("mechanisms") as got:
         if not got:
@@ -126,7 +144,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
     applies from a later session, since a running session keeps the tools it started with.
     `prompts` is None where the log does not say, and the session counts as one prompt."""
-    if ctx.config.toolprune == "off":
+    _, run, _ = fold_stages(ctx, prompts)
+    if not run:
         return None
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
@@ -173,8 +192,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
 def unprotected(ctx, items):
     """`items` less what is protected now: a list stored before a tool was protected must not
     write it later."""
-    protected = LiveAdapter(ctx.host, ctx.repo.root,
-                            protect=ctx.config.toolprune_protect).protected_tools()
+    # No session here, so no catalog to load; only the protected tools matter.
+    protected = fold_adapter(ctx, catalog={}).protected_tools()
     return [t for t in items if t not in protected]
 
 
@@ -290,9 +309,7 @@ def fold_locked(ctx, session_id, transcript_path=None):
             record["error"] = "transcript unreadable"
         else:
             run_dir = _run_dir(workdir, trace_path)
-            adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
-                                  catalog=load_catalog(ctx.root, ctx.host.name),
-                                  protect=ctx.config.toolprune_protect)
+            adapter = fold_adapter(ctx)
             with ctx.store.locked("mechanisms"):
                 inj = _fold_microskills(ctx, adapter, run_dir, session_id,
                                         injected=sess.get("injected_ids"))
