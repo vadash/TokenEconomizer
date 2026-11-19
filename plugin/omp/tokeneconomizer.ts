@@ -510,8 +510,9 @@ export default function tokeneconomizer(api: ExtensionAPI) {
     handler: async (args, ctx) => {
       // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
       // Bare `/te` asks for the CLI's one-line subcommand list, which the panel turns into the
-      // index; a subcommand's output is shown as it printed, except `config`, which shows the two
-      // config files.
+      // index; a subcommand's output is shown as it printed, except `config` and `config show`,
+      // which show the two config files. `config set` and `config unset` printed a confirmation
+      // that names the file written, so that output is shown instead.
       const argline = (args || "").trim();
       const sessionId = ctx.sessionManager.getSessionId();
       // The session id lets `te status` say when this session is recorded under the repository
@@ -525,10 +526,13 @@ export default function tokeneconomizer(api: ExtensionAPI) {
       );
       let markdown: string;
       if (!argline) markdown = indexPanel(out, ctx.cwd);
-      else if (argline.split(/\s+/)[0] === "config") {
-        const global = /(?:^|\s)--global(?:ly)?(?:\s|$)/.test(argline);
-        markdown = configPanel(ctx.cwd, global);
-      } else markdown = resultPanel(out);
+      else {
+        const words = argline.split(/\s+/).filter((t) => !/^--global(?:ly)?$/.test(t));
+        if (words[0] === "config" && (words.length === 1 || words[1] === "show")) {
+          const global = /(?:^|\s)--global(?:ly)?(?:\s|$)/.test(argline);
+          markdown = configPanel(ctx.cwd, global);
+        } else markdown = resultPanel(out);
+      }
       showPanel(ctx, markdown);
     },
   });
