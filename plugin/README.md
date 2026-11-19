@@ -125,8 +125,8 @@ loop guard acts during a turn.
 
 Run every command as `/te <command>` in omp, or from a terminal in the repository as the
 installed plugin's `scripts\te.cmd <command>` (before the first session, the checkout's
-`plugin\scripts\te.cmd`). From a terminal, `--host` defaults to the agent that last worked in
-the repository. Quote a fact id that holds spaces or shell characters: `te.cmd microskills
+`plugin\scripts\te.cmd`). From a terminal, `--host` is accepted but ignored (omp is the only
+host). Quote a fact id that holds spaces or shell characters: `te.cmd microskills
 forget 'form_repair:run_tests:pytest -q'`.
 
 Inside omp, each command answers in an overlay panel; from a terminal it costs nothing. `/te

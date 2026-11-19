@@ -914,9 +914,8 @@ def build_parser():
     ap = argparse.ArgumentParser(prog="te", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cwd", default=os.getcwd())
-    ap.add_argument("--host", default=None)
-    # The same two options are accepted after the subcommand too (`te fold --host codex ...`).
-    # SUPPRESS keeps a subcommand that omits them from overwriting the top-level values.
+    ap.add_argument("--host", default=None)  # accepted but ignored: omp is the only host
+    # The same two options are accepted after the subcommand too (`te fold --host omp ...`).
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cwd", default=argparse.SUPPRESS)
     common.add_argument("--host", default=argparse.SUPPRESS)
@@ -981,15 +980,6 @@ def build_parser():
     p.set_defaults(fn=cmd_probe)
     return ap
 
-
-def _recent_host(cwd):
-    """The host whose state for this repository changed last ("omp" when there is any)."""
-    from .paths import repo_identity, repo_state_dir
-    try:
-        repo = repo_identity(cwd)
-    except OSError:
-        return None
-    return "omp" if os.path.isdir(repo_state_dir(repo, "omp")) else None
 
 
 def _split_argline(line):
