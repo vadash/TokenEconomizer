@@ -60,7 +60,7 @@ import time
 from .. import loopguard
 from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall,
                toolcheck)
-from .config import canonical, unset_config, write_config
+from .config import LiveConfig, canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
 
@@ -724,9 +724,27 @@ def _config_view(cfg):
     }
 
 
+def _seed_global_config(root):
+    """Create the global config file with every setting at its default, when it is not there.
+
+    `show` is where a person looks for the file to edit, so it must exist by the time they open
+    it. A file already there is never rewritten, and a home that cannot hold one is ignored:
+    showing the settings must not fail with it."""
+    path = os.path.join(root, "config.json")
+    if os.path.exists(path):
+        return
+    try:
+        os.makedirs(root, exist_ok=True)
+        with open(path, "x", encoding="utf-8") as fh:
+            json.dump(LiveConfig().as_dict(), fh, indent=2, sort_keys=True)
+    except OSError:
+        pass
+
+
 def cmd_config(args):
     ctx = _ctx(args)
     if args.action == "show":
+        _seed_global_config(ctx.root)
         print(json.dumps(_config_view(ctx.config), indent=2))
         return 0
     path = (os.path.join(ctx.root, "config.json") if args.globally

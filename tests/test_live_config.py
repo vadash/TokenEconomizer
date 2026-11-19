@@ -6,6 +6,7 @@ mechanism does what the setting says.
 """
 import json
 import os
+from dataclasses import fields
 
 import pytest
 
@@ -232,3 +233,49 @@ def test_off_everywhere_and_on_in_one_repository_runs_only_there(env, repo, tmp_
         run_session(env, checkout, sid, str(tmp_path / f"{sid}.jsonl"))
     assert os.listdir(os.path.join(home, "repos")) == [on]
     assert os.listdir(os.path.join(home, "repos", on)) != ["config.json"]   # it ran there
+
+
+# ---- the settings file a person opens -------------------------------------------------------
+def _show(env, repo_path, monkeypatch):
+    from tokeneconomizer.plugin import cli
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", env["TOKENECONOMIZER_HOME"])
+    return cli.main(["--host", "claude", "--cwd", repo_path, "config", "show"])
+
+
+def test_show_creates_the_global_file_with_every_setting_at_its_default(env, repo, monkeypatch,
+                                                                        capsys):
+    path = os.path.join(env["TOKENECONOMIZER_HOME"], "config.json")
+    assert not os.path.exists(path)
+    assert _show(env, repo, monkeypatch) == 0
+    first = capsys.readouterr().out
+    written = json.load(open(path, encoding="utf-8"))
+    settable = {f.name for f in fields(LiveConfig)} - {"warnings"}
+    assert len(written) == len(settable) and set(written) == settable
+    assert written["microskills"] == "off" and written["loopguard"] == "nudge"
+    assert written["toolprune_protect"] == [] and written["history_max_sessions"] == 200
+    raw = open(path, "rb").read()
+    assert _show(env, repo, monkeypatch) == 0
+    assert capsys.readouterr().out == first
+    assert open(path, "rb").read() == raw
+    assert not os.path.exists(os.path.join(repo, "config.json"))
+
+
+def test_show_leaves_an_existing_global_file_byte_for_byte(env, repo, monkeypatch, capsys):
+    home = env["TOKENECONOMIZER_HOME"]
+    os.makedirs(home)
+    path = os.path.join(home, "config.json")
+    original = b'{"loopguard":"off","microskills":"envfacts"}'
+    with open(path, "wb") as fh:
+        fh.write(original)
+    assert _show(env, repo, monkeypatch) == 0
+    assert json.loads(capsys.readouterr().out)["loopguard"]["loopguard"] == "off"
+    assert open(path, "rb").read() == original
+
+
+def test_show_still_prints_when_the_home_cannot_hold_a_file(repo, tmp_path, monkeypatch, capsys):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x")
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(blocker / "home"))
+    from tokeneconomizer.plugin import cli
+    assert cli.main(["--host", "claude", "--cwd", repo, "config", "show"]) == 0
+    assert json.loads(capsys.readouterr().out)["microskills"]["microskills"] == "off"
