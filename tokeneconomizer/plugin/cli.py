@@ -563,6 +563,11 @@ def cmd_toolprune(args):
     return 2
 
 
+def cmd_repo_key(args):
+    print(paths.repo_identity(args.cwd).key)
+    return 0
+
+
 # ---- repomap ------------------------------------------------------------------------------
 def cmd_repomap(args):
     ctx = _ctx(args)
@@ -970,6 +975,8 @@ def build_parser():
     p.add_argument("--status", action="store_true", help="what the import did here")
     p.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_history)
+    p = add("repo-key")
+    p.set_defaults(fn=cmd_repo_key)
     p = add("repomap")
     p.add_argument("action", nargs="?", default="show", choices=("show", "refresh"))
     p.set_defaults(fn=cmd_repomap)
