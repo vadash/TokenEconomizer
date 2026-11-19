@@ -303,7 +303,8 @@ def test_real_cli_selects_the_requested_repository_without_applying_a_pending_pr
         result = subprocess.run(
             [sys.executable, "-m", "tokeneconomizer.plugin.cli", "--host", "codex",
              "--cwd", str(repo), "status", *options], env=env, cwd=elsewhere,
-            capture_output=True, text=True, encoding="utf-8", timeout=30)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            timeout=30)
         assert result.returncode == 0, result.stderr
         return result.stdout
 

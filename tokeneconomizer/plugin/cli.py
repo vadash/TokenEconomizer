@@ -52,7 +52,9 @@ import glob
 import json
 import os
 import shlex
+import shutil
 import sys
+import textwrap
 import time
 
 from .. import loopguard
@@ -300,6 +302,30 @@ def cmd_status(args):
     return 0
 
 
+def _config_names(path, key):
+    """Whether the config file at `path` names `key` under its current or an old spelling."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return isinstance(doc, dict) and any(canonical(k) == key for k in doc)
+
+
+def _microskills_origin(ctx):
+    """Where this repository's effective microskills value comes from, in config merge order:
+    the environment, then the repository's config, then the global one, else the default."""
+    for var in ("TE_MICROSKILLS", "TE_INJECT"):
+        if ctx.env.get(var):
+            return f"environment {var}"
+    for label, path in (("repo config", os.path.join(os.path.dirname(ctx.store.base),
+                                                     "config.json")),
+                        ("global config", os.path.join(ctx.root, "config.json"))):
+        if _config_names(path, "microskills"):
+            return label
+    return ""
+
+
 def cmd_microskills(args):
     if args.action in ("forget", "unforget"):
         return _microskills_forget(args)
@@ -309,14 +335,30 @@ def cmd_microskills(args):
         return 2
     ctx = _ctx(args)
     inj = ctx.store.read("injection.json") or {}
-    if ctx.config.microskills == "off":
-        print(f"micro-skills is off here (the default). `config set microskills=on` turns it on: "
-              f"facts are then learned from finished sessions, and a model proposes more every "
+    value = ctx.config.microskills
+    origin = _microskills_origin(ctx)
+    print(f"micro-skills is {'off' if value == 'off' else 'on'} here "
+          + (f"({origin}: {value}; default off)" if origin else "(the default)"))
+    if value == "off":
+        print(f"`config set microskills=on` turns it on: facts are then learned from finished "
+              f"sessions, and a model proposes more every "
               f"{ctx.config.microskills_propose_every} sessions, through this agent")
-        if not inj:
-            return 0
     text = inj.get("rendered") or ""
-    print(text.rstrip() or "(nothing injected yet: no fact has cleared its firing gate)")
+    if text:
+        print(text.rstrip())
+    else:
+        # Every fact counts its own exercised sessions, so this is the shortest wait any new
+        # fact faces; sessions imported from before the plugin were not folded here.
+        from tokeneconomizer.microskills.lifecycle import FIRE_GATE, FIRE_MIN_N, K_PROMOTE
+        folded = max(0, int(inj.get("sessions", 0) or 0)
+                     - int(inj.get("imported_sessions", 0) or 0))
+        print(f"{min(folded, FIRE_MIN_N)}/{FIRE_MIN_N} sessions toward firing gate")
+        print(f"a fact is promoted after {K_PROMOTE} confirmations and injected only once it "
+              f"fired in {FIRE_GATE:.0%} of at least {FIRE_MIN_N} sessions that exercised it; "
+              f"only sessions folded while micro-skills was on here count")
+        print("(nothing injected yet: no fact has cleared its firing gate)")
+    if not inj:
+        return 0
     facts = inj.get("facts") or {}
     rows = [(k, v) for k, v in facts.items() if isinstance(v, dict) and "state" in v]
     if rows:
@@ -377,33 +419,47 @@ def _microskills_forget(args):
 
 
 # ---- toolprune -----------------------------------------------------------------------------
+def _wrap(line, indent=""):
+    """Fill one long line to the terminal, without splitting a tool name or a pattern."""
+    return textwrap.fill(line, width=max(shutil.get_terminal_size().columns, 40),
+                         initial_indent=indent, subsequent_indent=indent,
+                         break_long_words=False, break_on_hyphens=False)
+
+
 def _toolprune_show(ctx, unt):
     host = ctx.host.name
-    target = ("the omp session tool list (applied by the extension at session start)"
-              if host == "omp" else denylist.settings_path(ctx.repo.root, host))
+    applied = denylist.applied_for(ctx.store, ctx.repo.root, host)
+    proposal = _proposal(ctx, unt)
+    kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
+    waiting = [t for t in unt.get("needs_apply") or [] if t in proposal]
+    held = unt.get("auto_pending")
+    pending = [t for t in (held.get("items") if isinstance(held, dict) else None) or []
+               if t in proposal]
     print(f"sessions observed: {unt.get('sessions', 0)} ({unt.get('prompts', 0)} prompts)  "
           f"catalog: {unt.get('catalog_source') or 'none yet'}")
-    print(f"applied ({denylist.unit(host, plural=True)} this plugin added to "
-          f"{target}): "
-          f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
-    print(f"proposed: {', '.join(_proposal(ctx, unt)) or '-'}")
+    print(f"applied (blocked by this plugin): {', '.join(applied) or '->'}")
+    print(f"proposed: {', '.join(proposal) or '->'}")
+    print(f"pending: {', '.join(pending) or '->'}")
+    print(f"kept (gave back, never re-applied in auto): {', '.join(kept) or '->'}")
     if unt.get("imported_sessions"):
-        print(f"of which {unt['imported_sessions']} from before the plugin "
-              f"({unt.get('imported_prompts', 0)} prompts), read from the agent's history")
-    waiting = [t for t in unt.get("needs_apply") or [] if t in _proposal(ctx, unt)]
+        print(_wrap(f"of which {unt['imported_sessions']} from before the plugin "
+                    f"({unt.get('imported_prompts', 0)} prompts), read from the agent's history"))
     if waiting and ctx.config.toolprune == "auto":
-        print(f"waiting for `toolprune apply`: {', '.join(waiting)} (the evidence for them "
-              f"includes sessions from before the plugin, so `auto` does not write them)")
-    pending = [t for t in (unt.get("auto_pending") or {}).get("items") or []
-               if t in _proposal(ctx, unt)]
+        print(_wrap(f"waiting for `toolprune apply`: {', '.join(waiting)} (the evidence for them "
+                    f"includes sessions from before the plugin, so `auto` does not write them)"))
     if pending and ctx.config.toolprune == "auto":
-        print(f"pending: written once this repository's sessions have been idle "
-              f"{ctx.config.toolprune_quiet_minutes} minutes, so that no conversation you "
-              f"resume re-reads its cached prompt (`toolprune apply` writes it now)")
-    kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
-    if kept:
-        print(f"kept, as you gave them back (`toolprune apply NAME` removes one again): "
-              f"{', '.join(kept)}")
+        print(_wrap(f"written once this repository's sessions have been idle "
+                    f"{ctx.config.toolprune_quiet_minutes} minutes, so that no conversation you "
+                    f"resume re-reads its cached prompt (`toolprune apply` writes it now)",
+                    indent="  "))
+    for tip in ("apply: writes the proposed list now; it takes effect from the next session",
+                "restore: gives entries back; what you give back is kept, and `auto` never "
+                "re-applies it (`toolprune apply NAME` removes one again)",
+                "protect: never proposes a tool by name or pattern (`config set "
+                "toolprune_protect=NAME`)",
+                "apply-pending: writes a pending auto list once this repository's sessions have "
+                "been idle"):
+        print(_wrap(tip))
     if host == "codex":
         caps = unt.get("capabilities") or {}
         if caps:
@@ -414,8 +470,9 @@ def _toolprune_show(ctx, unt):
                       f"{e['unused_sessions']:3d}{'  USED (kept)' if e['used'] else ''}")
         trusted = denylist.codex_project_trusted(ctx.repo.root)
         if trusted is False:
-            print("note: Codex reads a project's .codex/config.toml only in a TRUSTED project; "
-                  "trust this one in Codex first, or an applied proposal does nothing.")
+            print(_wrap("note: Codex reads a project's .codex/config.toml only in a TRUSTED "
+                        "project; trust this one in Codex first, or an applied proposal does "
+                        "nothing."))
         return 0
     if host == "copilot":
         servers = unt.get("servers") or {}
@@ -439,12 +496,13 @@ def _toolprune_show(ctx, unt):
     if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
         if os.path.exists(os.path.join(ctx.root, "hosts", host, "catalog.json")):
             # Recorded, but a repository reads the catalog when its next session is folded.
-            print("note: the catalog `toolprune refresh-catalog` recorded joins this repository's "
-                  "evidence from its next session.")
+            print(_wrap("note: the catalog `toolprune refresh-catalog` recorded joins this "
+                        "repository's evidence from its next session."))
         else:
-            print(f"note: without `te --host {host} toolprune refresh-catalog` only "
-                  + ("deferred and observed" if host == "claude" else "observed")
-                  + " tools are known, which leaves the always-loaded tools out of the evidence.")
+            print(_wrap(f"note: without `te --host {host} toolprune refresh-catalog` only "
+                        + ("deferred and observed" if host == "claude" else "observed")
+                        + " tools are known, which leaves the always-loaded tools out of the "
+                          "evidence."))
     return 0
 
 

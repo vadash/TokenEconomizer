@@ -68,3 +68,35 @@ def test_prefix_stage_after_task_reports_tokens(tmp_path):
     opt, reason = stage.after_task({"instance_id": "w-1"}, {}, rd, srow)
     assert reason == "manual-distill"
     assert "manual_facts" in srow
+
+
+def test_microskills_progress_counts_only_sessions_folded_while_it_was_on(
+        tmp_path, monkeypatch, capsys):
+    import json
+
+    from tokeneconomizer.plugin import cli, hosts
+    from tokeneconomizer.plugin.config import load_config
+    from tokeneconomizer.plugin.context import LiveContext
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"TOKENECONOMIZER_HOME": str(tmp_path / "home"),
+           "GIT_CEILING_DIRECTORIES": str(tmp_path)}
+    for var in ("TE_MICROSKILLS", "TE_INJECT"):
+        monkeypatch.delenv(var, raising=False)
+    ctx = LiveContext.build(hosts.Codex(), str(repo), env, settle=False)
+    ctx.store.ensure()
+    repo_dir = os.path.dirname(ctx.store.base)
+    with open(os.path.join(repo_dir, "config.json"), "w", encoding="utf-8") as fh:
+        json.dump({"microskills": "on"}, fh)
+    ctx.config = load_config(ctx.root, repo_dir=repo_dir, env=env)
+    ctx.store.write("injection.json", {"sessions": 5, "imported_sessions": 2, "rendered": ""})
+    monkeypatch.setattr(cli, "_ctx", lambda args: ctx)
+
+    assert cli.main(["--host", "codex", "--cwd", str(repo), "microskills"]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == (
+        "micro-skills is on here (repo config: envfacts+distiller; default off)")
+    assert "3/4 sessions toward firing gate" in out
+    assert "fired in 40% of at least 4 sessions" in out
+    assert "(nothing injected yet: no fact has cleared its firing gate)" in out

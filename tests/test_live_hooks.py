@@ -595,7 +595,8 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     assert deny() == []
     assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "show"]) == 0
     out = capsys.readouterr().out
-    assert "proposed: -" in out and "kept, as you gave them back" in out
+    assert "proposed: ->" in out
+    assert "kept (gave back, never re-applied in auto): CronCreate" in out
     assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "apply", "Workflow"]) == 0
     assert deny() == ["Workflow"]
     assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
@@ -764,8 +765,7 @@ def test_by_default_a_deny_list_waits_until_the_repositorys_sessions_have_been_i
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "show"]) == 0
-    assert "pending: written once this repository's sessions have been idle 60 minutes" in (
-        capsys.readouterr().out)
+    assert "sessions have been idle 60 minutes" in (capsys.readouterr().out)
     now = time.time()
     wait = fold.apply_pending(ctx, now=now + 600)                   # ten idle minutes: not yet
     assert 2900 < wait <= 3000 and _deny(repo) == []

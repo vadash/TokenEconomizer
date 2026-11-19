@@ -210,3 +210,20 @@ def test_toolprune_apply_and_restore_for_omp_say_where_they_take_effect(
     assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "restore"]) == 0
     ctx = LiveContext.build(Omp(), str(r))
     assert denylist.applied_for(ctx.store, str(r), "omp") == []
+
+
+def test_toolprune_show_names_every_section_and_its_verbs_when_nothing_is_recorded(
+        tmp_path, monkeypatch, capsys):
+    r = tmp_path / "git-repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    (r / "pyproject.toml").write_text("[project]\nname='w'\n")
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
+    assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "applied (blocked by this plugin): ->" in out
+    assert "\nproposed: ->\n" in out and "\npending: ->\n" in out
+    assert "kept (gave back, never re-applied in auto): ->" in out
+    for verb in ("apply:", "restore:", "protect:", "apply-pending:"):
+        assert verb in out
+    assert "unblock" not in out and "ignore" not in out
