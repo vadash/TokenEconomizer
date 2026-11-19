@@ -16,10 +16,11 @@ The evidence (`used_tools`, `tool_unused_streaks`, the catalog) accrues every se
 pruning is off, so switching it on later starts from what was already seen.
 """
 import os
+import time
 
 from ..stage import Stage
 from . import codex as cu
-from .tools import judge_tools_for_task
+from .tools import enough_evidence, judge_tools_for_task
 
 _CODEX_AGENTS = ("codex",)
 
@@ -196,3 +197,63 @@ class ToolingStage(Stage):
                 srow["untool_judge_tokens"] = self._task_judge_tokens or 0
                 srow["untool_judge_dropped"] = list(self._task_judge_dropped or [])
         return 0
+
+    # -- folding: one finished session into the next doc --
+    def fold_session(self, adapter, run_dir, session_id, prompts, prior, *, config,
+                     exclude_tools=(), warn_no_catalog=False,
+                     applied=(), kept=(),
+                     high_risk=frozenset(), high_risk_factor=3):
+        """Fold one finished session's tool evidence into the next doc.
+
+        The caller owns the store: it passes the prior doc and writes the next one back.
+        It also owns the deny list: it restores newly protected tools first, then passes
+        what is applied and kept so handled tools never return. Returns the next doc (the
+        untool.json shape, with the catalog source, the counts and the proposal) and the
+        outcome (the proposal; still pending here, nothing restored here).
+        """
+        self.adapter = adapter
+        self.used_tools = set(prior.get("used_tools", []))
+        self.tool_unused_streaks = {k: int(v) for k, v in
+                                    (prior.get("streaks") or {}).items()}
+        # A session from before prompts were counted counts as one prompt.
+        prompt_streaks = {k: int(v) for k, v in
+                          (prior.get("prompt_streaks") or self.tool_unused_streaks).items()}
+        self.catalog_tools = set(prior.get("catalog_tools", []))
+        self.catalog_desc = dict(prior.get("catalog_desc") or {})
+        # A masked session's catalog is only ever added to, so a shorter list removes
+        # nothing, and skipping it would keep out every tool that first appears later.
+        self._exclude_tools = list(exclude_tools)
+        self._warned_no_catalog = bool(warn_no_catalog)
+        srow = {}
+        before = dict(self.tool_unused_streaks)
+        self.after_task({"instance_id": session_id},
+                        {"untooled_excluded": list(exclude_tools)}, run_dir, srow)
+        for t, n in self.tool_unused_streaks.items():
+            if n == 0:
+                prompt_streaks[t] = 0                          # used
+            elif n == before.get(t, 0) + 1:                    # unused this session
+                prompt_streaks[t] = prompt_streaks.get(t, 0) + (
+                    1 if prompts is None else prompts)
+        sessions = int(prior.get("sessions", 0)) + 1
+        # The stage proposes never-used tools unused for the session floor, and
+        # `enough_evidence` decides among them.
+        raw = [t for t in
+               self.build_tools({"instance_id": f"after-{session_id}"}, sessions) or []
+               if enough_evidence(self.tool_unused_streaks.get(t, 0),
+                                  prompt_streaks.get(t, 0), config,
+                                  high_risk=t in high_risk,
+                                  high_risk_factor=high_risk_factor)]
+        handled = set(applied) | set(kept)
+        proposal = [t for t in raw if t not in handled]
+        doc = {"used_tools": sorted(self.used_tools), "streaks": self.tool_unused_streaks,
+               "prompt_streaks": prompt_streaks,
+               "catalog_tools": sorted(self.catalog_tools), "catalog_desc": self.catalog_desc,
+               # A session with no tool call and no catalog parses none; the last source
+               # still describes the catalog.
+               "catalog_source": srow.get("untool_catalog_source") or prior.get(
+                   "catalog_source"),
+               "sessions": sessions, "prompts": int(prior.get("prompts", 0)) + (prompts or 0),
+               "updated": time.time()}
+        doc["proposal"] = proposal
+        doc["new_in_proposal"] = sorted(set(proposal) - set(prior.get("proposal", [])))
+        return doc, {"proposal": proposal, "pending": False, "restored": []}

@@ -655,6 +655,37 @@ def test_a_protected_tool_is_never_left_out_and_a_rule_already_written_comes_bac
         "untool.json")["proposal"]
 
 
+def test_tooling_stage_fold_session_folds_one_session_into_the_next_doc(tmp_path):
+    """`ToolingStage.fold_session` takes the prior untool.json doc and one session, and
+    returns the next doc plus the outcome -- one session is not enough evidence."""
+    from tokeneconomizer.config import ToolingConfig
+    from tokeneconomizer.plugin.adapter import LiveAdapter
+    from tokeneconomizer.toolprune import ToolingStage
+
+    class Host:
+        def tool_usage(self, path):
+            return {"bash": {}}
+
+    class Cfg:
+        toolprune_evidence = 10
+        toolprune_min_sessions = 2
+        toolprune_sessions = 5
+
+    adapter = LiveAdapter(Host(), str(tmp_path), catalog={"bash": "", "Workflow": ""})
+    stage = ToolingStage(ToolingConfig(evidence=1), "omp", "agent", adapter=adapter)
+    run = tmp_path / "run"
+    run.mkdir()
+    next_doc, outcome = stage.fold_session(
+        adapter, str(run), "s1", 3, {}, config=Cfg(), applied=(), kept=(),
+        high_risk=frozenset(), high_risk_factor=3)
+    assert next_doc["sessions"] == 1 and next_doc["prompts"] == 3
+    assert next_doc["streaks"] == {"bash": 0, "Workflow": 1}
+    assert next_doc["prompt_streaks"] == {"bash": 0, "Workflow": 3}
+    assert next_doc["catalog_source"] == "probe+observed"
+    assert next_doc["proposal"] == [] and next_doc["new_in_proposal"] == []
+    assert outcome == {"proposal": [], "pending": False, "restored": []}
+
+
 def _pending_repo(env, repo, tmp_path, quiet="60"):
     """Five sessions that leave three tools unused, under the default wait before writing."""
     env = dict(env, TE_TOOLPRUNE_QUIET_MINUTES=quiet)

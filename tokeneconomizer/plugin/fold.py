@@ -136,18 +136,6 @@ def forget_microskills(ctx, ids, undo=False):
     return out
 
 
-def enough_evidence(sessions, prompts, cfg, high_risk=False):
-    """Has a never-used tool gone unused long enough to be left out? Over `toolprune_evidence`
-    prompts spread across at least `toolprune_min_sessions` sessions, or over
-    `toolprune_sessions` sessions however short; a high-risk tool needs HIGH_RISK_FACTOR times
-    the prompts and the sessions. Prompts let long sessions count for more; the floor keeps one
-    session's prompts -- one piece of work -- from deciding alone (in recorded sessions that is
-    what pruned tools a later session needed)."""
-    k = live_adapter.HIGH_RISK_FACTOR if high_risk else 1
-    return ((sessions >= cfg.toolprune_min_sessions and prompts >= cfg.toolprune_evidence * k)
-            or sessions >= cfg.toolprune_sessions * k)
-
-
 def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     """Tool pruning's evidence: the sessions a tool went unused (`ToolingStage`'s streaks) and
     the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
@@ -158,26 +146,15 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
     from tokeneconomizer.toolprune import ToolingStage
-    st = ctx.store.read("untool.json") or {}
+    prior = ctx.store.read("untool.json") or {}
     # The stage proposes never-used tools unused for the session floor; `enough_evidence`
     # decides among them.
     stage = ToolingStage(ToolingConfig(evidence=max(1, ctx.config.toolprune_min_sessions)),
                          host, "agent",
                          adapter=adapter, repo=ctx.repo.label, results_root=ctx.mech_dir,
                          fresh=True)
-    stage.used_tools = set(st.get("used_tools", []))
-    stage.tool_unused_streaks = {k: int(v) for k, v in (st.get("streaks") or {}).items()}
-    # A session from before prompts were counted counts as one prompt.
-    prompt_streaks = {k: int(v) for k, v in
-                      (st.get("prompt_streaks") or stage.tool_unused_streaks).items()}
-    stage.catalog_tools = set(st.get("catalog_tools", []))
-    stage.catalog_desc = dict(st.get("catalog_desc") or {})
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
-    # Read the session's catalog even when it ran under a deny list. The stage skips a masked
-    # session's catalog, but here the catalog is only ever added to, so a shorter list removes
-    # nothing, and skipping it would keep out every tool that first appears later.
-    stage._exclude_tools = []
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
     # person wrote, and only in the direction of giving a tool back.
@@ -194,38 +171,18 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     # The stage warns once per STREAM when no catalog parses -- a harness defect signal there.
     # Here a stage lives for one fold, and a session that called no tool legitimately has no
     # observed catalog; the source (or its absence) is recorded in untool.json instead.
-    stage._warned_no_catalog = True
-    srow = {}
-    before = dict(stage.tool_unused_streaks)
-    stage.after_task({"instance_id": session_id},
-                     {"untooled_excluded": stage._exclude_tools}, run_dir, srow)
-    for t, n in stage.tool_unused_streaks.items():
-        if n == 0:
-            prompt_streaks[t] = 0                          # used
-        elif n == before.get(t, 0) + 1:                    # unused this session
-            prompt_streaks[t] = prompt_streaks.get(t, 0) + (1 if prompts is None else prompts)
-    sessions = int(st.get("sessions", 0)) + 1
-    raw = [t for t in stage.build_tools({"instance_id": f"after-{session_id}"}, sessions) or []
-           if enough_evidence(stage.tool_unused_streaks.get(t, 0), prompt_streaks.get(t, 0),
-                              ctx.config, high_risk=t in live_adapter.HIGH_RISK)]
-    doc = {"used_tools": sorted(stage.used_tools), "streaks": stage.tool_unused_streaks,
-           "prompt_streaks": prompt_streaks,
-           "catalog_tools": sorted(stage.catalog_tools), "catalog_desc": stage.catalog_desc,
-           # A session with no tool call and no catalog parses none; the last source still
-           # describes the catalog.
-           "catalog_source": srow.get("untool_catalog_source") or st.get("catalog_source"),
-           "sessions": sessions, "prompts": int(st.get("prompts", 0)) + (prompts or 0),
-           "updated": time.time()}
-    proposal = [t for t in raw if t not in applied and t not in kept]
-    doc["proposal"] = proposal
-    doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
-    if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
-        _hold(doc, st, proposal, ctx.repo.root)
+    doc, outcome = stage.fold_session(
+        adapter, run_dir, session_id, prompts, prior, config=ctx.config,
+        warn_no_catalog=True, applied=applied, kept=kept,
+        high_risk=live_adapter.HIGH_RISK, high_risk_factor=live_adapter.HIGH_RISK_FACTOR)
+    if ctx.config.toolprune == "auto" and doc["proposal"] and not ctx.config.shadow:
+        _hold(doc, prior, doc["proposal"], ctx.repo.root)
     if restored:
         doc["restored_protected"] = restored
     ctx.store.write("untool.json", doc)
-    return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
-            "restored": restored}
+    outcome["pending"] = bool(doc.get("auto_pending"))
+    outcome["restored"] = restored
+    return outcome
 
 
 def unprotected(ctx, items):

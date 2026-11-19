@@ -12,7 +12,7 @@ Stdlib only; never imports the plugin runtime.
 """
 from .codex import CodexUntoolProfile
 from .stage import ToolingStage
-from .tools import INAPPLICABLE_TOOLS, PROTECTED_TOOLS, judge_tools_for_task
+from .tools import INAPPLICABLE_TOOLS, PROTECTED_TOOLS, enough_evidence, judge_tools_for_task
 
 __all__ = ["CodexUntoolProfile", "ToolingStage", "INAPPLICABLE_TOOLS", "PROTECTED_TOOLS",
-           "judge_tools_for_task"]
+           "enough_evidence", "judge_tools_for_task"]

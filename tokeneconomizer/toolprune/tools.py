@@ -102,3 +102,14 @@ def judge_tools_for_task(problem_statement, catalog, runner, model="agent",
         if t in out:
             out[t] = True
     return out, tokens
+
+
+def enough_evidence(sessions, prompts, cfg, high_risk=False, high_risk_factor=3):
+    """Decide if a never-used tool stayed unused long enough to leave out. It qualifies over
+    `toolprune_evidence` prompts across at least `toolprune_min_sessions` sessions, or over
+    `toolprune_sessions` sessions however short. A high-risk tool needs `high_risk_factor`
+    times the prompts and the sessions. Prompts let long sessions count for more, and the
+    session floor keeps one session's prompts -- one piece of work -- from deciding alone."""
+    k = high_risk_factor if high_risk else 1
+    return ((sessions >= cfg.toolprune_min_sessions and prompts >= cfg.toolprune_evidence * k)
+            or sessions >= cfg.toolprune_sessions * k)
