@@ -733,12 +733,22 @@ def _seed_global_config(root):
     path = os.path.join(root, "config.json")
     if os.path.exists(path):
         return
+    # Tmp-plus-rename like config._write: the file either appears complete or not at all,
+    # so a failed dump can never strand a truncated config.json that blocks later seeds.
+    tmp = path + ".tmp"
     try:
         os.makedirs(root, exist_ok=True)
-        with open(path, "x", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(LiveConfig().as_dict(), fh, indent=2, sort_keys=True)
+        if os.path.exists(path):
+            os.remove(tmp)
+        else:
+            os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def cmd_config(args):
