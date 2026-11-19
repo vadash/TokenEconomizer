@@ -38,8 +38,8 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   a hook becomes `{}` and a line in `~/.tokeneconomizer/errors.log`.
 - On-disk state names (`injection.json`, `untool.json`, `envelope.json`, event kinds) are a
   compatibility surface; renaming them strands what users have learned.
-- Settings keep their earlier names as aliases (`inject`, `untool`, `spiral`, ...; see
-  `tokeneconomizer/plugin/config.py`); write new code against the current names.
+- Settings use current names only; old names warn on read and refuse on `config set`.
+- Reviewers: dead-code findings cite repo-wide grep evidence; see `CODING_STANDARDS.md`.
 - No run outputs in the repository: transcripts, rows, streams, figures rendered from runs and
   tables derived from them stay out of git (`.gitignore`). The one exception is the paper's
   headline results in `README.md` (the line under the badges, the Results section, and the
@@ -51,7 +51,8 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   made-up sessions and no numbers.
 - The plugin's own text (`plugin/`, its manifests, slash commands and skills, and what the
   hooks print) makes no claims of effect.
-- Tests: `env -u MSYS_NO_PATHCONV COLUMNS=200 python -m pytest tests -q -rfE --tb=line -s < README.md`
+- Tests: `scripts/pytest tests -q -rfE` (pins `COLUMNS` and the stdin redirect below).
+  The full command it wraps: `env -u MSYS_NO_PATHCONV COLUMNS=200 python -m pytest tests -q -rfE --tb=line -s < README.md`
   (`experiments/tests` is benchmark-only and CI never runs it). The stdin redirect is load-bearing:
   without a real file on stdin, launcher/subprocess tests fail with `WinError 6`. A change to what
   the plugin learns or decides should be checked against recorded sessions, not only the unit tests.

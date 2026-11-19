@@ -1,0 +1,6 @@
+#!/bin/sh
+# The one test entry point for agent/sandbox runs: pins the env and the stdin
+# redirect the Windows-only lane needs. Without a real file on stdin,
+# launcher/subprocess tests fail with WinError 6. CI uses its own command
+# (real console stdin there); humans can too.
+env -u MSYS_NO_PATHCONV COLUMNS=200 python -m pytest "$@" --tb=line -s < README.md
