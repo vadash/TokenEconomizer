@@ -329,17 +329,8 @@ def fold_locked(ctx, session_id, transcript_path=None):
             if usage.get("cache_creation_1h_input_tokens"):
                 record["cache_creation_1h_input_tokens"] = usage["cache_creation_1h_input_tokens"]
             record["effective_tokens"], record["priced_by"] = eff, priced_by
-        turns = sess.get("turns") or []
-        record.update({
-            "turns": len(turns),
-            "nudges": int(sess.get("nudges", 0)), "aborts": int(sess.get("aborts", 0)),
-            "injected_chars": int(sess.get("injected_chars", 0)),
-            "untool_applied": denylist.applied_for(ctx.store),
-            "overhead": {
-                "optimizer_tokens": ((record.get("injection") or {}).get("optimizer_tokens")
-                                     or 0),
-                "spiral_judge_tokens": float(sess.get("judge_tokens", 0) or 0),
-                "spiral_nudge_writer_tokens": float(sess.get("writer_tokens", 0) or 0)}})
+        record.update(accounting.session_fragment(
+            sess, record.get("injection"), denylist.applied_for(ctx.store)))
         ctx.store.append("ledger.jsonl", record)
         entry = {"at": time.time(), "transcript": transcript}
         folded[session_id] = entry

@@ -33,6 +33,23 @@ def overhead_total(overhead):
     return ledger.overhead(overhead or {})
 
 
+def session_fragment(sess, injection_outcome, applied):
+    """The session-doc counters a fold merges into its ledger record."""
+    turns = sess.get("turns") or []
+    return {
+        "turns": len(turns),
+        "nudges": int(sess.get("nudges", 0)),
+        "aborts": int(sess.get("aborts", 0)),
+        "injected_chars": int(sess.get("injected_chars", 0)),
+        "untool_applied": applied if applied is not None else [],
+        "overhead": {
+            "optimizer_tokens": ((injection_outcome or {}).get("optimizer_tokens") or 0),
+            "spiral_judge_tokens": float(sess.get("judge_tokens", 0) or 0),
+            "spiral_nudge_writer_tokens": float(sess.get("writer_tokens", 0) or 0),
+        },
+    }
+
+
 def summarize(records):
     """Aggregate ledger records into the numbers `te status` prints.
 
