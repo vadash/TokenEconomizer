@@ -22,7 +22,6 @@ import re
 
 from ..names import repo_filename
 from ..trace import call_cwds
-from ..trace.claude import CONVERSATION
 from .lifecycle import Forgetting, Lifecycle, edited_files, edited_pyfiles, write_json_atomic
 
 # ---- proposer cadence / caps / gates ---------------------------------------
@@ -45,69 +44,13 @@ BADARG_RE = re.compile(r"unrecognized arguments|no such option|usage:|error: arg
 
 # ---- transcript parsing ----------------------------------------------------
 def load_calls(fp):
-    """Ordered ``(tool_lower, args, out_text)`` calls for any supported agent.
-
-    Codex (``item.completed``) and Copilot (``tool.execution_*``) have no Claude-style
-    ``message.content[]`` envelope, so BOTH are routed through the shared trajectory
-    normalizer (trace.load_trajectory auto-detects every schema); otherwise a Copilot
-    transcript would parse to [] and the proposer would run (billed) but ground nothing.
-    """
+    """Ordered ``(tool_lower, args, out_text)`` calls for a finished session."""
     try:
-        is_codex = is_copilot = False
-        with open(fp, encoding="utf-8", errors="replace") as probe:
-            for line in probe:
-                if ('"item.completed"' in line
-                        or '"type": "item.completed"' in line):
-                    is_codex = True
-                    break
-                if ('"tool.execution_start"' in line
-                        or '"tool.execution_complete"' in line):
-                    is_copilot = True
-                    break
-        if is_codex or is_copilot:
-            from ..trace import load_trajectory
-            return [(name.lower(), args, out)
-                    for name, args, out, _ok in load_trajectory(fp)]
+        from ..trace import load_trajectory
+        return [(str(name or "").lower(), args if isinstance(args, dict) else {}, out or "")
+                for name, args, out, _ok in load_trajectory(fp)]
     except OSError:
         return []
-    uses, order, res = {}, [], {}
-    for line in open(fp, encoding="utf-8", errors="replace"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(d, dict):
-            continue
-        m = d.get("message")
-        if not isinstance(m, dict) or d.get("type", "assistant") not in CONVERSATION:
-            continue
-        c = m.get("content")
-        if not isinstance(c, list):
-            continue
-        for b in c:
-            if not isinstance(b, dict):
-                continue
-            tid = b.get("id") if b.get("type") == "tool_use" else b.get("tool_use_id")
-            if not isinstance(tid, str):
-                continue
-            if b.get("type") == "tool_use" and tid not in uses:
-                name = b.get("name")
-                inp = b.get("input")
-                uses[tid] = (name if isinstance(name, str) else "",
-                             inp if isinstance(inp, dict) else {})
-                order.append(tid)
-            elif b.get("type") == "tool_result":
-                cont = b.get("content")
-                if isinstance(cont, list):
-                    txt = "\n".join(x.get("text") for x in cont
-                                    if isinstance(x, dict) and isinstance(x.get("text"), str))
-                else:
-                    txt = cont if isinstance(cont, str) else json.dumps(cont)
-                res[tid] = txt
-    return [(uses[t][0].lower(), uses[t][1], res.get(t, "")) for t in order]
 
 
 def bash_cmds(calls):

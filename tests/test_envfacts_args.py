@@ -4,7 +4,7 @@ the same task, by the run that worked."""
 import pytest
 
 from tokeneconomizer.microskills import envfacts as ef, observe
-from fixtures import write_claude_transcript
+from fixtures import write_omp_session
 
 OK = "Ran 4 tests in 0.1s\n\nOK"
 
@@ -23,7 +23,7 @@ def _stream(tmp_path, tasks):
     rendered = []
     for i, calls in enumerate(tasks):
         rendered.append(d.render())
-        d.update(write_claude_transcript(str(tmp_path / f"t{i}.jsonl"), calls), iid=f"t{i}")
+        d.update(write_omp_session(str(tmp_path / f"t{i}.jsonl"), calls), iid=f"t{i}")
     return d, rendered
 
 
@@ -192,26 +192,6 @@ def _sh(cmd, out):
     return ("Bash", {"command": cmd}, out)
 
 
-def test_a_bare_runner_in_a_directory_an_earlier_cd_left_is_learned_with_that_cd(tmp_path):
-    """Seen in a live session: Claude Code's shell keeps its directory, so after `cd tests &&
-    python runtests.py ...` the agent ran a bare `python runtests.py ...` -- in `tests/`. Read
-    without the directory, that taught "`python runtests.py` works", which fails from the
-    directory sessions start in."""
-    tasks = [[_at(_edit(i), ROOT),
-              _at(_sh("python -m pytest tests/app/tests.py -q",
-                      "/venv/bin/python: No module named pytest"), ROOT),
-              _at(_sh(f"cd tests && python runtests.py app{i} -v 2", OK), ROOT),
-              _at(_sh(f"python runtests.py app{i}.tests -v 2", OK), ROOT + "/tests"),
-              _at(_sh("python runtests.py app.tests 2>&1 | tail -3",
-                      "python: can't open file 'runtests.py': [Errno 2] No such file or "
-                      "directory"), ROOT)]
-             for i in range(6)]
-    d, rendered = _stream(tmp_path, tasks)
-    assert "`(cd tests && python runtests.py …)` works" in rendered[-1]
-    assert "`python runtests.py …` works" not in rendered[-1]
-    assert not any(k.endswith(":python runtests.py") for k in d.facts), sorted(d.facts)
-
-
 def test_a_cd_into_the_start_directory_by_absolute_path_is_no_cd():
     o = observe.classify_command("cd /r && python tests/runtests.py app", cwd="", root="/r")[0]
     assert o.form == "python tests/runtests.py"
@@ -271,19 +251,10 @@ def test_sessions_started_in_a_subdirectory_learn_the_repositorys_plain_form(tmp
 
 
 def test_a_command_stopped_by_its_own_cd_teaches_nothing(tmp_path):
-    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
+    p = write_omp_session(str(tmp_path / "t.jsonl"), [
         _at(_sh("cd tests && python runtests.py app", "Exit code 1\n/bin/bash: line 1: cd: "
                 "tests: No such file or directory"), ROOT + "/tests")])
     assert observe.observe_task(p)["obs"] == []
-
-
-def test_call_directories_line_up_with_the_calls(tmp_path):
-    from tokeneconomizer import trace
-    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
-        _at(_sh("ls", "a"), ROOT), ("Read", {"file_path": "/r/a"}, "x"),
-        _at(_sh("ls", "b"), ROOT + "/tests")])
-    assert trace.call_cwds(p) == [ROOT, None, ROOT + "/tests"]
-    assert len(trace.load_trajectory(p)) == 3
 
 
 CANT_OPEN = ("Exit code 2\npython: can't open file 'runtests.py': [Errno 2] No such file or "

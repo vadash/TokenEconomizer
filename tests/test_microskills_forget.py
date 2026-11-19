@@ -22,13 +22,13 @@ CLAIM = "`pytest …` fails here with command not found; `python -m pytest …` 
 
 @pytest.fixture
 def te(env, repo, monkeypatch, capsys):  # noqa: F811
-    """`te --host claude --cwd REPO ...` in the hooks' environment: (exit code, output)."""
+    """`te --host omp --cwd REPO ...` in the hooks' environment: (exit code, output)."""
     for k, v in env.items():
         monkeypatch.setenv(k, v)
 
     def run(*argv):
         capsys.readouterr()
-        code = cli.main(["--host", "claude", "--cwd", repo, *argv])
+        code = cli.main(["--host", "omp", "--cwd", repo, *argv])
         return code, capsys.readouterr().out
     return run
 
@@ -183,8 +183,8 @@ def test_argline_keeps_a_quoted_id_with_spaces_as_one_argument():
     """Pi's `/te ...` hands `te` the line as typed (`--argline`); `te` splits it as a shell would."""
     from tokeneconomizer.plugin.cli import _expand_argline
     line = 'microskills forget "form_repair:run_tests:python -m pytest" other-id'
-    assert _expand_argline(["--host", "pi", "--argline", line]) == [
-        "--host", "pi", "microskills", "forget", "form_repair:run_tests:python -m pytest", "other-id"]
+    assert _expand_argline(["--host", "omp", "--argline", line]) == [
+        "--host", "omp", "microskills", "forget", "form_repair:run_tests:python -m pytest", "other-id"]
     assert _expand_argline(["--argline=status"]) == ["status"]
     assert _expand_argline(["status"]) == ["status"]
 

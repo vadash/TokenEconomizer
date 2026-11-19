@@ -6,7 +6,7 @@ import pytest
 import tokeneconomizer.microskills.distiller as dist
 from tokeneconomizer.microskills import Distiller
 from tokeneconomizer.microskills.distiller import parse_payload
-from fixtures import write_claude_transcript
+from fixtures import write_omp_session
 
 
 def _runner(payload):
@@ -55,7 +55,7 @@ def test_parse_payload_keeps_valid_entries_next_to_malformed():
 def test_ground_treats_non_list_cite_as_empty(tmp_path):
     d = Distiller("acme/widget")
     tr = str(tmp_path / "t.jsonl")
-    write_claude_transcript(tr, [("bash", {"command": "pytest"}, "1 passed")])
+    write_omp_session(tr, [("bash", {"command": "pytest"}, "1 passed")])
     d.update(tr, iid="w-0", resolved=True)
     for cite in (3, "w-0", {}, {"w-0": 1}, [["w-0"], {"x": 1}, 7]):
         spec = {"id": "f", "detector": {"scope": "ran_tests", "confirm": "passed"}, "cite": cite}
@@ -70,7 +70,7 @@ def test_update_survives_malformed_proposer_reply(tmp_path, raw):
     try:
         for i in range(3):
             tr = str(tmp_path / f"t{i}.jsonl")
-            write_claude_transcript(tr, [("bash", {"command": "pytest"}, "1 passed")])
+            write_omp_session(tr, [("bash", {"command": "pytest"}, "1 passed")])
             d.update(tr, iid=f"w-{i}", resolved=True)
     finally:
         dist.PROPOSE_EVERY = saved
@@ -91,7 +91,7 @@ def test_valid_fact_admitted_alongside_malformed_ones(tmp_path):
     try:
         for i in range(2):
             tr = str(tmp_path / f"t{i}.jsonl")
-            write_claude_transcript(tr, [("bash", {"command": "pytest"}, "1 passed")])
+            write_omp_session(tr, [("bash", {"command": "pytest"}, "1 passed")])
             d.update(tr, iid=f"w-{i}", resolved=True)
     finally:
         dist.PROPOSE_EVERY = saved
@@ -113,7 +113,7 @@ def test_empty_detectors_do_not_crowd_out_a_valid_fact(tmp_path):
     try:
         for i in range(2):
             tr = str(tmp_path / f"t{i}.jsonl")
-            write_claude_transcript(tr, [("bash", {"command": "pytest"}, "1 passed")])
+            write_omp_session(tr, [("bash", {"command": "pytest"}, "1 passed")])
             d.update(tr, iid=f"w-{i}", resolved=True)
     finally:
         dist.PROPOSE_EVERY = saved

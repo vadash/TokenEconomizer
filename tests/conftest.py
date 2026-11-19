@@ -40,14 +40,11 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_history(tmp_path_factory, monkeypatch):
-    """No test reads the person's own agent logs: a first session start imports what Claude
-    Code keeps under `~/.claude/projects` (`CLAUDE_CONFIG_DIR`). Both point at an empty
-    directory; a test that wants earlier sessions writes them there or names its own."""
+def _no_own_home(tmp_path_factory, monkeypatch):
+    """No test reads the person's own home directory."""
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
 
 
 @pytest.fixture(autouse=True)
@@ -59,9 +56,4 @@ def _no_model_calls(request, monkeypatch):
     monkeypatch.setattr(judge, "spawn_job", judge.run_job)
     if request.node.get_closest_marker("real_sidecalls"):
         return
-    for name in ("claude_call", "codex_call", "copilot_call", "droid_call", "grok_call",
-                 "hermes_call", "omp_call", "pi_call"):
-        monkeypatch.setattr(sidecall, name, lambda *a, **k: ("", None))
-    # Nor the on-device model: `fm` answers nothing, as if absent, unless a test fakes it.
-    monkeypatch.setattr(sidecall, "fm_call", lambda *a, **k: (None, 0))
-    monkeypatch.setattr(sidecall, "_fm_ok", {})
+    monkeypatch.setattr(sidecall, "omp_call", lambda *a, **k: ("", None))

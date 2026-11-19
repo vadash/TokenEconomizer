@@ -1,24 +1,21 @@
-"""Every agent's tool calls as one ordered list of `(name, args, result_text, success)`.
+"""An omp session's tool calls as one ordered list of `(name, args, result_text, success)`.
 
-`load_trajectory` reads a saved session log of any supported agent -- a Claude Code transcript
-or `stream-json`, a Copilot CLI event log, a Codex `exec --json` stream -- and returns the same
-tuples, so a mechanism never needs to know which agent wrote the file. A Codex rollout and a Pi
-session are converted into one of these first (`codex.codex_rollout_to_exec`,
-`pi.pi_session_to_claude`).
+`load_trajectory` reads a finished omp session, or the event transcript `omp_write_session`
+wrote from one, and returns the same tuples, so a mechanism never needs to know which shape it
+was handed.
 """
+import json
 import os
 import re
 
-from .claude import claude_calls
-from .codex import codex_exec_calls
-from .copilot import copilot_event_calls, copilot_session_cwd
+from . import omp
 
-# rtk in its Codex mode changes the COMMAND LINE rather than hooking it: the agent is told to
-# type `rtk pytest`, `rtk git status`, `rtk proxy <cmd>`. Every classifier that reads a
-# command's first token -- the micro-skill vocabulary, a test-run detector -- would otherwise
-# stop seeing a test run, a fetch or a repository query. One definition, so the classifiers
-# cannot disagree about what counts as the wrapper. `rtk proxy` is rtk's own passthrough (run
-# unfiltered, still tracked); a bare `rtk` with no command is left alone.
+# rtk changes the COMMAND LINE rather than hooking it: the agent is told to type `rtk pytest`,
+# `rtk git status`, `rtk proxy <cmd>`. Every classifier that reads a command's first token --
+# the micro-skill vocabulary, a test-run detector -- would otherwise stop seeing a test run, a
+# fetch or a repository query. One definition, so the classifiers cannot disagree about what
+# counts as the wrapper. `rtk proxy` is rtk's own passthrough (run unfiltered, still tracked); a
+# bare `rtk` with no command is left alone.
 RTK_PREFIX_RE = re.compile(r"^rtk\s+(?:proxy\s+)?(?=\S)")
 
 
@@ -27,49 +24,82 @@ def strip_rtk_prefix(command):
     return RTK_PREFIX_RE.sub("", (command or "").lstrip(), count=1)
 
 
-def _is_codex_exec(lines):
-    return any('"type":"item.completed"' in line.replace(" ", "") for line in lines)
+def _events(path):
+    """The session's canonical events: `omp_session_events` for a raw session file, else the
+    transcript's own lines."""
+    if not os.path.exists(path):
+        return []
+    recs = []
+    for line in open(path, encoding="utf-8", errors="replace"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            recs.append(ev)
+    if recs and recs[0].get("type") == "session":
+        return omp.omp_session_events(path)
+    return recs
+
+
+def _calls(path):
+    """[(name, args, result_text, success, cwd)] over the session's events: each `tool_use`
+    block paired with its `tool_result` by id, with the directory the shell was in."""
+    out, order, seen, results = [], [], {}, {}
+    for ev in _events(path):
+        if ev.get("type") not in ("assistant", "user"):
+            continue
+        msg = ev.get("message") or {}
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                tid = b.get("id")
+                if not isinstance(tid, str) or tid in seen:
+                    continue
+                name = b.get("name")
+                args = b.get("input", {})
+                seen[tid] = {"name": name if isinstance(name, str) else "",
+                             "args": args if isinstance(args, dict) else {},
+                             "cwd": ev.get("cwd") if isinstance(ev.get("cwd"), str) else None}
+                order.append(tid)
+            elif b.get("type") == "tool_result":
+                tid = b.get("tool_use_id")
+                if not isinstance(tid, str):
+                    continue
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = "\n".join(x.get("text") for x in c
+                                  if isinstance(x, dict) and isinstance(x.get("text"), str))
+                results[tid] = (c if isinstance(c, str) else "",
+                                not b.get("is_error", False))
+    for tid in order:
+        info = seen[tid]
+        res_text, ok = results.get(tid, ("", True))
+        out.append((info["name"], info["args"], res_text, ok, info["cwd"]))
+    return out
 
 
 def load_trajectory(path):
-    """Ordered [(tool_name, args, result_text, success)] over a saved session log.
-
-    The schema is sniffed from the lines: Codex emits completed items, Claude Code emits message
-    envelopes carrying `tool_use` blocks, and anything else is read as Copilot events."""
-    if not os.path.exists(path):
-        return []
-    lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
-    if _is_codex_exec(lines):
-        return codex_exec_calls(lines)
-    # Copilot can also say "tool_use" in metadata (for example a model's finish reason).
-    # Recognize actual Claude conversation blocks, not strings anywhere in the event log.
-    claude = claude_calls(lines)
-    if claude:
-        return [c[:4] for c in claude]
-    return copilot_event_calls(lines)
+    """Ordered [(tool_name, args, result_text, success)] over a saved omp session."""
+    return [c[:4] for c in _calls(path)]
 
 
 def call_cwds(path):
     """The directory each call of `load_trajectory(path)` ran in, aligned with it; None where
-    the log does not say. Claude Code's shell keeps its directory between calls, and its
-    transcript records it on every entry: after `cd tests && ...`, a bare `python runtests.py`
-    runs in `tests/`. Codex runs each command afresh. Copilot's log records only where the
-    session started, and that is where its calls are read as starting: models there type
-    `cd <that directory> && ...` before every command, which is then the plain form."""
-    calls = load_trajectory(path)
-    if not calls or not os.path.exists(path):
-        return [None] * len(calls)
-    lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
-    if _is_codex_exec(lines):
-        return [None] * len(calls)
-    cwds = [c[4] for c in claude_calls(lines)]
-    if len(cwds) == len(calls):
-        return cwds
-    return [copilot_session_cwd(lines)] * len(calls)
+    the log does not say. omp runs each command afresh in the session's directory, and the
+    session header records it on every event."""
+    return [c[4] for c in _calls(path)]
 
 
 def tool_usage(path):
-    """{tool_name: calls} over a saved session log."""
+    """{tool_name: calls} over a saved session."""
     counts = {}
     for name, _args, _res, _ok in load_trajectory(path):
         if name:

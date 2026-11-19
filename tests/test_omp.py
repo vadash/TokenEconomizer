@@ -1,5 +1,5 @@
 """oh-my-pi (`omp`) as a host: the turn identity and tool result its adapter sends, its headless
-modes, its session log read through the Pi trace, the shell it marks, and its side call."""
+modes, its session log read through the trace seam, and its side call."""
 import io
 import json
 import os
@@ -63,7 +63,7 @@ def test_every_omp_session_is_its_own_and_never_a_subagent():
     assert h.stop_hint(True).startswith("Press Ctrl+C to end the run")
 
 
-def test_the_omp_session_is_read_through_the_pi_trace(tmp_path):
+def test_the_omp_session_is_read_through_the_trace_seam(tmp_path):
     h = Omp()
     src = omp_session(tmp_path)
     out = h.mechanism_trace(str(src), str(tmp_path))
@@ -84,11 +84,12 @@ def test_the_omp_session_is_read_through_the_pi_trace(tmp_path):
     assert usage["model"] == "anthropic/claude-haiku-4.5"
 
 
-def test_omp_marks_the_shell_its_bash_tool_starts():
+def test_omp_is_the_only_host_a_command_or_hook_can_select():
     assert hosts.default_host({"PI_SESSION_ID": "s"}) == "omp"
-    assert hosts.default_host({"PI_SESSION_FILE": "f"}) == "omp"
-    assert hosts.default_host({"TE_HOST": "codex", "PI_SESSION_ID": "s"}) == "codex"
+    assert hosts.default_host({"TE_HOST": "omp"}) == "omp"
+    assert hosts.default_host({"TE_HOST": "codex", "PI_SESSION_ID": "s"}) == "omp"
     assert hosts.detect({}, hint="omp").name == "omp"
+    assert hosts.detect({"turn_id": "t"}, hint="codex").name == "omp"
 
 
 @pytest.mark.real_sidecalls
@@ -187,7 +188,7 @@ def test_the_omp_deny_list_is_plugin_state_and_never_a_settings_file(tmp_path):
     denylist.set_kept(st, tmp_path, "omp", remove=["debug"])
     assert denylist.kept_for(st, tmp_path, "omp") == []
     assert not list(tmp_path.rglob("settings.local.json"))
-    assert not (tmp_path / ".claude").exists() and not (tmp_path / ".codex").exists()
+    assert list(tmp_path.iterdir()) == [tmp_path / "st"]     # only the plugin's own state
 
 
 def test_toolprune_apply_and_restore_for_omp_say_where_they_take_effect(

@@ -46,38 +46,9 @@ person can tune by hand:
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map;
-  * <agent>_paid_model          -- the model of the plugin's own calls on that agent, over
-                                   `paid_model` (claude, codex, copilot, pi, opencode, cursor,
-                                   grok, hermes, droid, omp);
-  * claude_paid_effort, codex_paid_effort -- their reasoning effort on those two agents;
-  * local_model, local_roles   -- run the named side calls (`judge`, `nudge`, `proposer`;
-                                   default `judge`) on an on-device model instead of the
-                                   agent's CLI: `fm`, Apple's Foundation Models CLI on macOS 27.
-                                   Off by default. A call the local model cannot make -- no `fm`,
-                                   model unavailable, no reply -- falls back to the agent's CLI.
-                                   Local calls are charged 0 tokens;
-  * local_judge_confidence      -- the confidence a stuck verdict from the local judge must reach
-                                   to count (default 0.9); below it the turn is spared. The local
-                                   model's confidences come in coarse steps, so the guard's own
-                                   `judge_confidence` would let nearly every local "stuck"
-                                   through; how 0.9 was chosen: microsoft/TokenEconomizer#186;
-  * pi_extensions, pi_cli       -- on Pi, the extensions the plugin's own model calls load (a
-                                   custom provider's, whose model they could not reach otherwise;
-                                   comma-separated paths), and the `pi` they run;
-  * omp_cli                     -- on omp, the `omp` the plugin's own model calls run;
-  * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
-  * droid_sidecall              -- on Droid, allow the plugin's own model calls. They run
-                                   `droid exec`, which writes a session log of its own, so this
-                                   is off by default: `microskills=envfacts` learns without it;
-  * history_import              -- on Claude Code, fold a repository's sessions from before the
-                                   plugin (Claude Code's own logs) once, at its first session
-                                   start, when nothing is folded there yet. Off by default:
-                                   the plugin learns only from sessions it sees end, and
-                                   `te history import` reads them by hand;
-  * history_max_sessions, history_days -- the newest sessions that import takes, and how far
-                                   back it reads;
-  * history_dirs                -- further Claude Code `projects` folders to read, beside
-                                   `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`).
+  * omp_paid_model              -- the model of the plugin's own calls on omp, over
+                                   `paid_model`;
+  * omp_cli                     -- the `omp` the plugin's own model calls run.
 
 The names before the mechanisms were renamed are read too, so an existing config file keeps
 working: `inject` (microskills), `untool` (toolprune), `spiral` (loopguard), with their
@@ -97,12 +68,6 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
-# An on-device model some side calls can run on instead of the agent's CLI (`sidecall.local_runner`):
-# "fm" is Apple's Foundation Models CLI (`/usr/bin/fm`, macOS 27 with Apple Intelligence).
-LOCAL_MODELS = ("off", "fm")
-# The side calls `local_roles` may name. The judge is the default because it is the one the
-# evaluation supports; the redirect writer and the proposer are opt-in.
-LOCAL_ROLES = ("judge", "nudge", "proposer")
 TOOLPRUNE = ("off", "propose", "auto")
 LOOPGUARD = ("off", "nudge", "stop")
 REPOMAP = ("off", "on", "start")
@@ -138,6 +103,17 @@ OBSOLETE = {
     "paid": "the loop guard always asks its judge (`loopguard=off` turns it off), and "
             "micro-skills' proposer runs whenever micro-skills is on (`microskills=envfacts` "
             "keeps only the facts that need no model call)",
+    **{f"{h}_paid_model": "omp is the only host; use `omp_paid_model` or `paid_model`"
+       for h in ("claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes",
+                 "droid")},
+    **{k: "omp is the only host; the plugin's own calls take no effort setting"
+       for k in ("claude_paid_effort", "codex_paid_effort")},
+    **{k: "no on-device model: the on-device judge was macOS-only"
+       for k in ("local_model", "local_roles", "local_judge_confidence")},
+    **{k: "omp is the only host"
+       for k in ("pi_extensions", "pi_cli", "hermes_cli", "droid_sidecall")},
+    **{k: "omp keeps no session history the plugin reads"
+       for k in ("history_import", "history_max_sessions", "history_days", "history_dirs")},
 }
 
 # The loop guard's thresholds a person may pin (`loopguard.<name>=<value>`), with their type
@@ -199,43 +175,15 @@ class LiveConfig:
     repomap_python: str = ""
     repomap_timeout: int = 8
     paid_model: str = ""
-    claude_paid_model: str = ""
-    codex_paid_model: str = ""
-    copilot_paid_model: str = ""
-    pi_paid_model: str = ""
-    opencode_paid_model: str = ""
-    cursor_paid_model: str = ""
-    grok_paid_model: str = ""
-    hermes_paid_model: str = ""
-    droid_paid_model: str = ""
     omp_paid_model: str = ""
-    claude_paid_effort: str = ""
-    codex_paid_effort: str = ""
-    local_model: str = "off"
-    local_roles: list = field(default_factory=lambda: ["judge"])
-    local_judge_confidence: float = 0.9
-    pi_extensions: list = field(default_factory=list)
-    pi_cli: str = ""
     omp_cli: str = ""
-    hermes_cli: str = ""
-    droid_sidecall: bool = False
-    history_import: bool = False
-    history_max_sessions: int = 200
-    history_days: int = 365
-    history_dirs: list = field(default_factory=list)
     shadow: bool = False
     vocabulary: str = "auto"
     warnings: list = field(default_factory=list)
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
-                "local_model": LOCAL_MODELS,
-                "vocabulary": ("auto", "generic", "python-git", "node-web"),
-                # Each CLI's own words (Claude Code 2.1.319, Codex 0.167.0); whether a model
-                # takes one is the CLI's to say.
-                "claude_paid_effort": ("", "low", "medium", "high", "xhigh", "max"),
-                "codex_paid_effort": ("", "none", "minimal", "low", "medium", "high", "xhigh",
-                                      "max")}
+                "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
     _MIN = {"toolprune_quiet_minutes": 0}
 
@@ -297,11 +245,6 @@ class LiveConfig:
         except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: {key}={value!r} rejected ({e})")
             return False
-        if key == "local_roles":
-            bad = [r for r in v if r not in LOCAL_ROLES]
-            if bad:
-                self.warnings.append(f"{source}: local_roles {bad!r} not in {LOCAL_ROLES}")
-                return False
         choices = self._CHOICES.get(key)
         if choices and v not in choices:
             self.warnings.append(f"{source}: {key}={v!r} not one of {choices}")
@@ -339,12 +282,7 @@ class LiveConfig:
 # Environment variables, old names first so that a new name set alongside its old one wins.
 _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
-        **{f"TE_{a.upper()}_PAID_MODEL": f"{a}_paid_model" for a in (
-            "claude", "codex", "copilot", "pi", "opencode", "cursor", "grok", "hermes", "droid",
-            "omp")},
-        "TE_CLAUDE_PAID_EFFORT": "claude_paid_effort", "TE_CODEX_PAID_EFFORT": "codex_paid_effort",
-        "TE_LOCAL_MODEL": "local_model", "TE_LOCAL_ROLES": "local_roles",
-        "TE_LOCAL_JUDGE_CONFIDENCE": "local_judge_confidence",
+        "TE_OMP_PAID_MODEL": "omp_paid_model",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
         "TE_PROPOSE_EVERY": "microskills_propose_every",
@@ -363,11 +301,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
-        "TE_PI_EXTENSIONS": "pi_extensions", "TE_PI_CLI": "pi_cli",
-        "TE_OMP_CLI": "omp_cli",
-        "TE_HERMES_CLI": "hermes_cli",
-        "TE_HISTORY_IMPORT": "history_import", "TE_HISTORY_MAX_SESSIONS": "history_max_sessions",
-        "TE_HISTORY_DAYS": "history_days", "TE_HISTORY_DIRS": "history_dirs"}
+        "TE_OMP_CLI": "omp_cli"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 

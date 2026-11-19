@@ -38,7 +38,7 @@ def stop_turn(env, repo, sid="s", key="k"):
 
 
 def locks(env):
-    return os.path.join(env["TOKENECONOMIZER_HOME"], "locks", "claude")
+    return os.path.join(env["TOKENECONOMIZER_HOME"], "locks", "omp")
 
 
 def queue_of(env, sid="s"):
@@ -77,7 +77,7 @@ def test_tool_calls_made_in_parallel_are_all_recorded(tmp_path):
     for d in (home, state, cwd):
         d.mkdir()
     env = dict(os.environ, TOKENECONOMIZER_HOME=str(state), HOME=str(home), USERPROFILE=str(home),
-               CLAUDE_CONFIG_DIR=str(home / ".claude"), PYTHONUTF8="1", PYTHONPATH=REPO)
+               PYTHONUTF8="1", PYTHONPATH=REPO)
     env.pop("TE_SIDECALL", None)
     hook = [sys.executable, os.path.join(REPO, "plugin", "scripts", "te_bootstrap.py"), "hook"]
 
@@ -191,21 +191,6 @@ def test_an_unreadable_queue_entry_is_dropped(env, repo):
     assert waiting(env) == 0 and doc(env, repo)["turn"]["cum_turns"] == 1
 
 
-def test_every_wait_is_short_of_every_agents_hook_timeout():
-    """Codex gives SessionEnd 3 s. A hook also has to start, so a second is kept in hand."""
-    seen = 0
-    for path in glob.glob(os.path.join(REPO, "plugin", "hooks", "*.json")):
-        with open(path, encoding="utf-8") as fh:
-            spec = json.load(fh).get("hooks") or {}
-        for event, groups in spec.items():
-            for group in groups if event in hookqueue.WAITS else ():
-                for h in group.get("hooks") or []:
-                    if h.get("timeout"):
-                        seen += 1
-                        assert hookqueue.WAITS[event] + 1 < h["timeout"], (path, event)
-    assert seen >= 15
-
-
 def test_idle_locks_go_and_a_queue_with_events_stays(tmp_path):
     base_dir = str(tmp_path)
     old = time.time() - hookqueue.IDLE_S - 60
@@ -227,14 +212,14 @@ def test_the_prune_leaves_the_lock_of_a_session_older_than_idle(tmp_path):
     so the file of a session running for longer than IDLE_S looked idle. The prune removed it
     while a hook held it, and on POSIX a parallel hook of that session then locked a new file
     and ran beside the holder."""
-    base_dir = os.path.join(str(tmp_path), "locks", "claude")
+    base_dir = os.path.join(str(tmp_path), "locks", "omp")
     os.makedirs(base_dir)
     lock = os.path.join(base_dir, ".s.lock")
     open(lock, "w", encoding="utf-8").close()
     old = time.time() - hookqueue.IDLE_S - 60
     os.utime(lock, (old, old))
     ctrl = SimpleNamespace(ctx=SimpleNamespace(root=str(tmp_path)),
-                           host=SimpleNamespace(name="claude"), sid="s", p={},
+                           host=SimpleNamespace(name="omp"), sid="s", p={},
                            cfg=SimpleNamespace(repomap="off"))
     beside = []
 

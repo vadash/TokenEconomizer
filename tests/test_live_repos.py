@@ -53,8 +53,8 @@ def env(tmp_path):
             "PATH": os.environ.get("PATH", "")}
 
 
-def call(env, payload, host):
-    """One hook call's final JSON object, with Copilot's notice lines as `progress`."""
+def call(env, payload, host="omp"):
+    """One hook call's final JSON object."""
     out = io.StringIO()
     hook.main(["--host", host], io.StringIO(json.dumps(payload)), out, env)
     lines = out.getvalue().splitlines()
@@ -64,7 +64,7 @@ def call(env, payload, host):
     return res
 
 
-def state(env, key, host="claude"):
+def state(env, key, host="omp"):
     return Store(os.path.join(env["TOKENECONOMIZER_HOME"], "repos", key, host))
 
 
@@ -135,31 +135,26 @@ def test_an_scp_remote_whose_owner_starts_with_a_digit_shares_the_https_key(tmp_
     assert "s1" in new.read("folded.json")
 
 
-# ---- one session, one repository, on every agent ------------------------------------------------
-def _payloads(host, sid, cwd, n):
-    base = {"session_id": sid, "cwd": cwd}
-    turn = {"claude": {"prompt_id": f"p{n}"}, "codex": {"turn_id": f"t{n}"},
-            "pi": {"prompt_id": f"{sid}:{n}"}, "copilot": {}}[host]
-    result = ({"tool_result": {"text_result_for_llm": "ok"}} if host == "copilot"
-              else {"tool_response": {"stdout": "ok"}})
-    return [dict(base, **turn, hook_event_name="UserPromptSubmit", prompt="go"),
-            dict(base, **turn, **result, hook_event_name="PostToolUse", tool_name="Bash",
-                 tool_input={"command": "ls"}),
-            dict(base, **turn, hook_event_name="Stop", stop_hook_active=False)]
+# ---- one session, one repository ----------------------------------------------------------
+def _payloads(sid, cwd, n):
+    base = {"session_id": sid, "cwd": cwd, "prompt_id": f"p{n}"}
+    return [dict(base, hook_event_name="UserPromptSubmit", prompt="go"),
+            dict(base, hook_event_name="PostToolUse", tool_name="Bash",
+                 tool_input={"command": "ls"}, tool_response={"content": "ok"}),
+            dict(base, hook_event_name="Stop", stop_hook_active=False)]
 
 
-@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi"])
-def test_a_session_that_moves_into_another_repository_stays_with_its_own(tmp_path, env, host):
-    """Claude Code's hook `cwd` follows the agent's `cd`; every agent's hooks name a cwd. The
-    first hook pins the session, and nothing is recorded under the repository it moved to."""
+def test_a_session_that_moves_into_another_repository_stays_with_its_own(tmp_path, env):
+    """The hook `cwd` follows the agent's `cd`. The first hook pins the session, and nothing is
+    recorded under the repository it moved to."""
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
     b = git_repo(str(tmp_path / "b"), "https://github.com/o/b")
     ka, kb = paths.repo_identity(a, env).key, paths.repo_identity(b, env).key
     call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a,
-               "source": "startup"}, host)
-    for p in _payloads(host, "s1", b, 1):
-        call(env, p, host)
-    st = state(env, ka, host)
+               "source": "startup"})
+    for p in _payloads("s1", b, 1):
+        call(env, p)
+    st = state(env, ka)
     rec = st.read(os.path.join("sessions", "s1.json"))
     assert rec["cwd"] == a and len(rec["turns"]) == 1
     assert not os.path.exists(os.path.join(env["TOKENECONOMIZER_HOME"], "repos", kb))
@@ -170,13 +165,13 @@ def test_te_fold_for_a_session_uses_its_pin(tmp_path, env, monkeypatch):
     b = git_repo(str(tmp_path / "b"), "https://github.com/o/b")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a}, "claude")
-    call(env, {"hook_event_name": "SessionEnd", "session_id": "s1", "cwd": b}, "claude")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a})
+    call(env, {"hook_event_name": "SessionEnd", "session_id": "s1", "cwd": b})
     ka = paths.repo_identity(a, env).key
     assert "s1" in (state(env, ka).read("folded.json") or {})
-    assert cli.main(["--host", "claude", "--cwd", b, "fold", "--session", "s1"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", b, "fold", "--session", "s1"]) == 0
     assert not os.path.exists(os.path.join(env["TOKENECONOMIZER_HOME"], "repos",
-                                           paths.repo_identity(b, env).key, "claude",
+                                           paths.repo_identity(b, env).key, "omp",
                                            "folded.json"))
 
 
@@ -185,13 +180,13 @@ def test_status_says_when_this_session_is_recorded_elsewhere(tmp_path, env, monk
     b = git_repo(str(tmp_path / "b"), "https://github.com/o/b")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    call(env, {"hook_event_name": "SessionStart", "session_id": "s9", "cwd": a}, "claude")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s9")
-    assert cli.main(["--host", "claude", "--cwd", b, "status"]) == 0
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s9", "cwd": a})
+    monkeypatch.setenv("TE_SESSION_ID", "s9")
+    assert cli.main(["--host", "omp", "--cwd", b, "status"]) == 0
     out = capsys.readouterr().out
     assert "identified by its origin remote (github.com/o/b)" in out
-    assert f"this claude session started in {a} and is recorded under o/a" in out
-    assert cli.main(["--host", "claude", "--cwd", a, "status"]) == 0
+    assert f"this omp session started in {a} and is recorded under o/a" in out
+    assert cli.main(["--host", "omp", "--cwd", a, "status"]) == 0
     assert "note " not in capsys.readouterr().out
 
 
@@ -204,7 +199,7 @@ def transcript(path, cwd):
 
 
 def legacy_session(st, sid, tp, cwd=None, folded=True, tokens=100.0, folded_at=1.0):
-    rec = {"session_id": sid, "host": "claude", "started": folded_at, "transcript": tp,
+    rec = {"session_id": sid, "host": "omp", "started": folded_at, "transcript": tp,
            "turns": [], "updated": folded_at}
     if cwd:
         rec["cwd"] = cwd
@@ -367,32 +362,32 @@ def test_a_pinned_session_follows_its_repository_into_a_merge(tmp_path, env):
     root = env["TOKENECONOMIZER_HOME"]
     gone = git_repo(str(tmp_path / "x"), "https://github.com/o/x")
     repo = paths.repo_identity(gone, env)
-    repos.pin(root, "claude", "s1", repo, gone)
+    repos.pin(root, "omp", "s1", repo, gone)
     state(env, repo.key).write("notices.json", {"a": 1})
     target = git_repo(str(tmp_path / "y"), "https://github.com/o/y")
     assert repos.merge(root, repo.key, paths.repo_identity(target, env)) is not None
-    assert repos.pinned(root, "claude", "s1").key == paths.repo_identity(target, env).key
+    assert repos.pinned(root, "omp", "s1").key == paths.repo_identity(target, env).key
     # A session pinned to that key after the merge is the key's again, written to or not.
-    repos.pin(root, "claude", "s2", repo, gone)
-    assert repos.pinned(root, "claude", "s2").key == repo.key
+    repos.pin(root, "omp", "s2", repo, gone)
+    assert repos.pinned(root, "omp", "s2").key == repo.key
 
 
 def test_te_repos_lists_merges_and_says_what_it_did(tmp_path, env, monkeypatch, capsys):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
-    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a}, "claude")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a})
     stray = state(env, "orphan-0000000000")
     legacy_session(stray, "s0", str(tmp_path / "missing.jsonl"), cwd=str(tmp_path / "gone"))
-    assert cli.main(["--host", "claude", "--cwd", a, "repos"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", a, "repos"]) == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0].startswith("o/a  [a-") and "<- this directory" in out
     assert "orphan-0000000000" in out and "identified   by its origin remote" in out
-    assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", "orphan-0000000000"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", a, "repos", "merge", "orphan-0000000000"]) == 0
     out = capsys.readouterr().out
-    assert "merged orphan-0000000000 into a-" in out and "claude 1 session(s)" in out
+    assert "merged orphan-0000000000 into a-" in out and "omp 1 session(s)" in out
     assert "s0" in state(env, paths.repo_identity(a, env).key).read("folded.json")
-    assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", "nope"]) == 2
+    assert cli.main(["--host", "omp", "--cwd", a, "repos", "merge", "nope"]) == 2
 
 
 def test_te_repos_merge_refuses_a_key_that_is_not_one_state_directory(tmp_path, env,
@@ -402,50 +397,52 @@ def test_te_repos_merge_refuses_a_key_that_is_not_one_state_directory(tmp_path, 
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
-    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a}, "claude")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": a})
     key = paths.repo_identity(a, env).key
-    for keys in (["."], [""], [".."], [f"{key}/claude"], [key, "."], [key, ""]):
-        assert cli.main(["--host", "claude", "--cwd", a, "repos", "merge", *keys]) == 2
+    for keys in (["."], [""], [".."], [f"{key}/omp"], [key, "."], [key, ""]):
+        assert cli.main(["--host", "omp", "--cwd", a, "repos", "merge", *keys]) == 2
     assert "not a state directory key" in capsys.readouterr().out
     assert os.listdir(repos.repos_dir(paths.state_root(env))) == [key]
     assert not os.path.exists(os.path.join(paths.state_root(env), "merged"))
 
 
-# ---- deny lists are per checkout --------------------------------------------------------------
-def test_a_deny_list_applied_in_one_clone_is_still_proposed_in_another(tmp_path):
-    st = Store(str(tmp_path / "st"))
+# ---- deny lists live in each checkout's own state -------------------------------------------------
+def test_a_deny_list_applied_in_one_clone_is_absent_in_another(tmp_path):
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/r")
     b = git_repo(str(tmp_path / "b"), "https://github.com/o/r")
-    assert denylist.apply(a, ["CronCreate"], st) == ["CronCreate"]
-    assert denylist.applied_for(st, a) == ["CronCreate"] and denylist.applied_for(st, b) == []
-    assert denylist.restore(b, st) == []                     # nothing of b's to take back
-    assert denylist.applied_for(st, a) == ["CronCreate"]
-    assert denylist.apply(b, ["CronCreate", "Monitor"], st) == ["CronCreate", "Monitor"]
-    assert denylist.applied(st) == ["CronCreate", "Monitor"]
+    st_a, st_b = Store(str(tmp_path / "a-st")), Store(str(tmp_path / "b-st"))
+    assert denylist.apply(a, ["CronCreate"], st_a) == ["CronCreate"]
+    assert denylist.applied_for(st_a, a) == ["CronCreate"]
+    assert denylist.applied_for(st_b, b) == []
+    assert denylist.restore(b, st_b) == []                # nothing of b's to take back
+    assert denylist.applied_for(st_a, a) == ["CronCreate"]
+    assert denylist.apply(b, ["CronCreate", "Monitor"], st_b) == ["CronCreate", "Monitor"]
+    assert denylist.applied(st_a) == ["CronCreate"]
+    assert denylist.applied(st_b) == ["CronCreate", "Monitor"]
 
 
 def test_a_deny_list_record_from_0_1_0_is_still_read(tmp_path):
     st = Store(str(tmp_path / "st"))
     a = git_repo(str(tmp_path / "a"))
-    path = denylist.settings_path(a, "claude")
-    st.write(denylist.APPLIED, {"tools": ["Monitor"], "path": path, "updated": 1})
+    st.write(denylist.APPLIED, {"tools": ["Monitor"], "path": "/gone/settings.json",
+                                "updated": 1})
+    assert denylist.applied(st) == ["Monitor"]            # the old shape still parses
+    assert denylist.applied_for(st, a) == []              # omp answers only its own list
+    assert denylist.apply(a, ["Monitor"], st) == ["Monitor"]
     assert denylist.applied_for(st, a) == ["Monitor"]
-    os.makedirs(os.path.dirname(path))
-    json.dump({"permissions": {"deny": ["Monitor", "Mine"]}}, open(path, "w"))
     assert denylist.restore(a, st) == ["Monitor"]
-    assert json.load(open(path)) == {"permissions": {"deny": ["Mine"]}}
-    assert denylist.applied(st) == []
+    assert denylist.applied_for(st, a) == []
 
 
 def test_pending_sessions_fold_oldest_first(tmp_path, env):
     from tokeneconomizer.plugin import hosts
     from tokeneconomizer.plugin.context import LiveContext
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/a")
-    ctx = LiveContext.build(hosts.ClaudeCode(), a, env)
-    for sid, started in (("z", 1.0), ("a", 3.0), ("m", 2.0)):
+    ctx = LiveContext.build(hosts.Omp(), a, env)
+    for sid, started in (("z", 1.0), ("u", 3.0), ("m", 2.0)):
         ctx.store.write(os.path.join("sessions", f"{sid}.json"),
                         {"session_id": sid, "started": started, "ended": started})
-    assert fold.pending_sessions(ctx) == ["z", "m", "a"]
+    assert fold.pending_sessions(ctx) == ["z", "m", "u"]
 
 
 def test_a_session_start_says_once_what_carrying_state_over_moved(tmp_path, env):
@@ -453,91 +450,44 @@ def test_a_session_start_says_once_what_carrying_state_over_moved(tmp_path, env)
     old = state(env, repos.legacy_key(clone, env))
     legacy_session(old, "s1", transcript(tmp_path / "s1.jsonl", clone))
     start = {"hook_event_name": "SessionStart", "cwd": clone, "source": "startup"}
-    out = call(env, dict(start, session_id="a"), "claude")
+    out = call(env, dict(start, session_id="a"))
     assert "now filed by repository (1 session(s) moved, 1 directory(ies) merged" in \
-        out["systemMessage"] and "/tokeneconomizer:repos" in out["systemMessage"]
-    assert "systemMessage" not in call(env, dict(start, session_id="b"), "claude")
-    assert "progress" not in call(env, dict(start, session_id="c"), "copilot")
+        out["systemMessage"] and "`/te repos`" in out["systemMessage"]
+    assert "systemMessage" not in call(env, dict(start, session_id="b"))
 
 
-# ---- carrying over each agent's state, from its own session logs --------------------------------
-# Every agent keeps its own subdirectory under a repository's state, learned from its own log
-# format; carrying state over must move each, and read where each agent's log says it started.
-from tests.test_live_core import copilot_events  # noqa: E402
-from tests.test_live_hooks import COPILOT_TRAP, pi_trap_session  # noqa: E402
+# ---- carrying over omp state, read from its session logs ---------------------------------------
+# omp keeps its own subdirectory under a repository's state, learned from its own log format;
+# carrying state over moves it, and reads where omp's log says each session started.
+from tests.test_live_hooks import trap_session  # noqa: E402
 
-AGENTS = ["claude", "codex", "copilot", "pi"]
 FACT = "`python -m pytest …` works."
 
 
-def claude_trap(path, cwd, i):
-    """The pytest trap as a Claude Code transcript, which names its directory on every entry."""
-    calls = [("Edit", {"file_path": f"{cwd}/pkg/mod{i}.py", "old_string": "a", "new_string": "b"},
-              "ok", False),
-             ("Bash", {"command": "pytest -q tests/test_a.py"}, "bash: pytest: command not found",
-              True),
-             ("Bash", {"command": "python -m pytest -q tests/test_a.py"}, "1 passed in 0.1s", False)]
-    lines = [{"type": "user", "cwd": cwd,
-              "message": {"role": "user", "content": f"fix bug {i}"}}]
-    for n, (name, inp, result, err) in enumerate(calls):
-        lines.append({"type": "assistant", "cwd": cwd, "message": {
-            "id": f"msg_{i}_{n}", "model": "claude-haiku-5-5", "role": "assistant",
-            "usage": {"input_tokens": 10, "cache_read_input_tokens": 1000,
-                      "cache_creation_input_tokens": 100, "output_tokens": 50},
-            "content": [{"type": "tool_use", "id": f"tu{i}{n}", "name": name, "input": inp}]}})
-        lines.append({"type": "user", "cwd": cwd, "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": f"tu{i}{n}", "content": result,
-             "is_error": err}]}})
-    with open(path, "w") as fh:
-        fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
-    return path
+def omp_trap(path, cwd, i):
+    """The pytest trap as an omp session file, naming its directory in the header, as omp's
+    own session files do (migration reads where each session started from its log)."""
+    tp = trap_session(path, cwd, i)
+    lines = open(tp, encoding="utf-8").read().splitlines()
+    head = json.loads(lines[0])
+    head["cwd"] = cwd
+    lines[0] = json.dumps(head)
+    open(tp, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    return tp
 
 
-def codex_trap(path, cwd, i):
-    """The pytest trap as a Codex rollout: `session_meta` names the directory."""
-    items = [{"type": "FileChange", "id": f"f{i}", "status": "completed",
-              "changes": [{"path": f"{cwd}/pkg/mod{i}.py", "kind": "update"}]},
-             {"type": "CommandExecution", "id": f"a{i}", "command": "pytest -q tests/test_a.py",
-              "aggregated_output": "bash: pytest: command not found", "exit_code": 127,
-              "status": "completed"},
-             {"type": "CommandExecution", "id": f"b{i}",
-              "command": "python -m pytest -q tests/test_a.py",
-              "aggregated_output": "1 passed in 0.1s", "exit_code": 0, "status": "completed"}]
-    recs = [{"type": "session_meta", "payload": {"id": f"thread-{i}", "cwd": cwd,
-                                                 "cli_version": "0.163.0"}},
-            {"type": "turn_context", "payload": {"turn_id": "t1", "model": "gpt-5.4-mini"}}]
-    recs += [{"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1",
-                                               "item": it}} for it in items]
-    recs.append({"type": "event_msg", "payload": {"type": "token_count", "info": {
-        "total_token_usage": {"input_tokens": 3000, "cached_input_tokens": 2000,
-                              "cache_write_input_tokens": 0, "output_tokens": 90,
-                              "reasoning_output_tokens": 10}}}})
-    with open(path, "w") as fh:
-        fh.write("\n".join(json.dumps(r) for r in recs) + "\n")
-    return path
-
-
-def agent_session(env, host, sid, cwd, i, tmp_path, monkeypatch, end=True):
-    """One session on `host`, its log in that agent's own format and place; returns what its
-    SessionStart answered."""
-    base = {"session_id": sid, "cwd": cwd}
-    if host == "copilot":                   # Copilot's log sits where its session id says
-        home = tmp_path / "copilot-home"
-        monkeypatch.setenv("COPILOT_HOME", str(home))
-        copilot_events(str(home / "session-state" / sid / "events.jsonl"), COPILOT_TRAP,
-                       cwd=cwd, sid=sid)
-    else:
-        make = {"claude": claude_trap, "codex": codex_trap, "pi": pi_trap_session}[host]
-        base["transcript_path"] = make(str(tmp_path / f"rollout-{host}-{sid}.jsonl"), cwd, i)
-    start = call(env, dict(base, hook_event_name="SessionStart", source="startup"), host)
+def agent_session(env, sid, cwd, i, tmp_path, end=True):
+    """One omp session, its log in omp's own format and place; returns what its SessionStart
+    answered."""
+    base = {"session_id": sid, "cwd": cwd,
+            "transcript_path": omp_trap(str(tmp_path / f"rollout-omp-{sid}.jsonl"), cwd, i)}
+    start = call(env, dict(base, hook_event_name="SessionStart", source="startup"))
     if end:
-        call(env, dict(base, hook_event_name="SessionEnd", reason="other"), host)
+        call(env, dict(base, hook_event_name="SessionEnd", reason="other"))
     return start
 
-
-def injected(out, host):
-    return (out.get("additionalContext") if host == "copilot" else
-            (out.get("hookSpecificOutput") or {}).get("additionalContext")) or ""
+def injected(out):
+    return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
 
 def as_0_1_0(env, key, old_key):
@@ -550,53 +500,48 @@ def as_0_1_0(env, key, old_key):
             os.remove(p)
     import shutil
     shutil.rmtree(os.path.join(root, "sessions"), ignore_errors=True)
-    for host in AGENTS:
-        st = state(env, old_key, host)
-        d = st.path("sessions")
-        for name in (os.listdir(d) if os.path.isdir(d) else []):
-            rec = st.read(os.path.join("sessions", name))
-            rec.pop("cwd", None)
-            st.write(os.path.join("sessions", name), rec)
+    st = state(env, old_key)
+    d = st.path("sessions")
+    for name in (os.listdir(d) if os.path.isdir(d) else []):
+        rec = st.read(os.path.join("sessions", name))
+        rec.pop("cwd", None)
+        st.write(os.path.join("sessions", name), rec)
 
 
-@pytest.mark.parametrize("host", AGENTS)
-def test_each_agents_learned_state_follows_its_repository_out_of_a_folder_named_key(
-        tmp_path, env, monkeypatch, host):
+def test_learned_state_follows_its_repository_out_of_a_folder_named_key(tmp_path, env):
     old = git_repo(str(tmp_path / "old-name"), "https://github.com/acme/widget")
     other = git_repo(str(tmp_path / "widget"), "https://github.com/acme/widget")
     key = paths.repo_identity(old, env).key
     for i in range(4):
-        agent_session(env, host, f"s{i}", old, i, tmp_path, monkeypatch)
-    assert FACT in state(env, key, host).read("injection.json")["rendered"]
+        agent_session(env, f"s{i}", old, i, tmp_path)
+    assert FACT in state(env, key).read("injection.json")["rendered"]
     legacy = repos.legacy_key(old, env)
     assert legacy.startswith("old-name-") and legacy != key
     as_0_1_0(env, key, legacy)
-    out = agent_session(env, host, "next", other, 9, tmp_path, monkeypatch, end=False)
-    assert FACT in injected(out, host)                       # learned in the other clone
-    moved = state(env, key, host)
+    out = agent_session(env, "next", other, 9, tmp_path, end=False)
+    assert FACT in injected(out)                       # learned in the other clone
+    moved = state(env, key)
     assert {f"s{i}" for i in range(4)} <= set(moved.read("folded.json"))
     assert len(moved.read_lines("ledger.jsonl")) == 4
     merged = os.listdir(os.path.join(env["TOKENECONOMIZER_HOME"], "merged"))
     assert [m.split(".")[0] for m in merged] == [legacy]
 
 
-@pytest.mark.parametrize("host", AGENTS)
-def test_each_agents_session_from_a_project_leaves_the_home_directory(
-        tmp_path, env, monkeypatch, host):
-    """The empty `~/.git` filed a project's sessions under ~; each agent's log says where its
+def test_a_session_from_a_project_leaves_the_home_directory(tmp_path, env):
+    """The empty `~/.git` filed a project's sessions under ~; omp's log says where its
     session started, and the session moves there and is folded again."""
     home = env["HOME"]
     proj = os.path.join(home, "proposal")
     os.makedirs(proj)
-    agent_session(env, host, "own", home, 1, tmp_path, monkeypatch)
-    agent_session(env, host, "theirs", proj, 2, tmp_path, monkeypatch)
+    agent_session(env, "own", home, 1, tmp_path)
+    agent_session(env, "theirs", proj, 2, tmp_path)
     # 0.1.0 put both under one key: the empty ~/.git made ~ the "repository" of both.
     os.makedirs(os.path.join(home, ".git"))
     legacy = repos.legacy_key(proj, env)
     hk, pk = paths.repo_identity(home, env).key, paths.repo_identity(proj, env).key
     assert legacy == hk
-    src = state(env, pk, host)
-    dst_old = state(env, hk, host)
+    src = state(env, pk)
+    dst_old = state(env, hk)
     for sid in ("theirs",):
         os.makedirs(dst_old.path("sessions"), exist_ok=True)
         os.replace(src.path("sessions", f"{sid}.json"), dst_old.path("sessions", f"{sid}.json"))
@@ -609,7 +554,7 @@ def test_each_agents_session_from_a_project_leaves_the_home_directory(
     as_0_1_0(env, hk, hk)
     repos.run_migration(env["TOKENECONOMIZER_HOME"], env)
     assert set(dst_old.read("folded.json")) == {"own"}
-    back = state(env, pk, host)
+    back = state(env, pk)
     assert set(back.read("folded.json")) == {"theirs"}       # folded again, where it ran
     (rec,) = back.read_lines("ledger.jsonl")
     assert rec["session_id"] == "theirs" and rec.get("error") is None
@@ -617,40 +562,31 @@ def test_each_agents_session_from_a_project_leaves_the_home_directory(
     assert os.path.exists(back.path("mechanisms", "envfacts_state", "proposal.json"))
 
 
-@pytest.mark.parametrize("host", AGENTS)
-def test_each_agents_state_follows_a_renamed_remote_under_its_new_name(
-        tmp_path, env, monkeypatch, host):
-    """A remote that moves (`aaron-jx-li/…` to `microsoft/…`) changes the key and the name the
-    mechanisms file their state under; Codex's capability state is filed by name too."""
+def test_state_follows_a_renamed_remote_under_its_new_name(tmp_path, env):
+    """A remote that moves changes the key and the name the mechanisms file their state under."""
     repo_dir = git_repo(str(tmp_path / "widget"), "https://github.com/acme/widget")
     for i in range(4):
-        agent_session(env, host, f"s{i}", repo_dir, i, tmp_path, monkeypatch)
-    old = state(env, paths.repo_identity(repo_dir, env).key, host)
+        agent_session(env, f"s{i}", repo_dir, i, tmp_path)
+    old = state(env, paths.repo_identity(repo_dir, env).key)
     assert os.path.exists(old.path("mechanisms", "envfacts_state", "acme__widget.json"))
-    if host == "codex":
-        assert os.path.exists(old.path("mechanisms", "interface_state", "acme__widget",
-                                       "codex_untool.json"))
     git_repo(repo_dir, "https://github.com/acme-renamed/widget")
-    out = agent_session(env, host, "next", repo_dir, 9, tmp_path, monkeypatch, end=False)
-    assert FACT in injected(out, host)
-    new = state(env, paths.repo_identity(repo_dir, env).key, host)
+    out = agent_session(env, "next", repo_dir, 9, tmp_path, end=False)
+    assert FACT in injected(out)
+    new = state(env, paths.repo_identity(repo_dir, env).key)
     mech = new.path("mechanisms")
     assert os.listdir(os.path.join(mech, "envfacts_state")) == ["acme-renamed__widget.json"]
-    if host == "codex":
-        assert os.listdir(os.path.join(mech, "interface_state")) == ["acme-renamed__widget"]
-        assert new.read("untool.json")["sessions"] == 4
 
 
-# ---- what a sandbox or an agent's own threads must not break ---------------------------------
-@pytest.mark.parametrize("host", AGENTS)
-def test_an_end_with_no_start_and_no_log_records_nothing(tmp_path, env, host):
-    """Codex 0.163.0 sends SessionEnd for a thread that never ran a prompt; it is no session."""
+# ---- what a sandbox or omp's own threads must not break -----------------------------------------
+def test_an_end_with_no_start_and_no_log_records_nothing(tmp_path, env):
+    """A SessionEnd for a session that never ran a prompt is no session."""
     repo_dir = git_repo(str(tmp_path / "r"), "https://github.com/o/r")
     call(env, {"hook_event_name": "SessionEnd", "session_id": "ghost", "cwd": repo_dir,
-               "reason": "other"}, host)
-    st = state(env, paths.repo_identity(repo_dir, env).key, host)
+               "reason": "other"})
+    st = state(env, paths.repo_identity(repo_dir, env).key)
     assert not os.path.exists(st.path("sessions", "ghost.json"))
     assert st.read_lines("ledger.jsonl") == []
+
 
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
@@ -658,20 +594,19 @@ def test_an_end_with_no_start_and_no_log_records_nothing(tmp_path, env, host):
                            "directories")
 def test_a_change_where_the_state_is_read_only_is_refused_whole(tmp_path, env, monkeypatch,
                                                                  capsys):
-    """Codex's default sandbox makes ~/.tokeneconomizer read-only. A change must be refused
-    before it starts, never half made: a deny list in the repository's settings with no record
-    of it, which `restore` would then not know to take back."""
+    """A read-only state directory refuses a change before it starts, never half made: an
+    applied deny list with no record of it, which `restore` would then not know to take back."""
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     repo_dir = git_repo(str(tmp_path / "r"), "https://github.com/o/r")
-    call(env, {"hook_event_name": "SessionStart", "session_id": "s", "cwd": repo_dir}, "claude")
+    call(env, {"hook_event_name": "SessionStart", "session_id": "s", "cwd": repo_dir})
     st = state(env, paths.repo_identity(repo_dir, env).key)
     st.write("untool.json", {"proposal": ["CronCreate"], "sessions": 5})
     for d in (st.base, os.path.dirname(st.base)):
         os.chmod(d, 0o500)
     try:
-        assert cli.main(["--host", "claude", "--cwd", repo_dir, "toolprune", "apply"]) == 1
-        assert cli.main(["--host", "claude", "--cwd", repo_dir, "config", "set",
+        assert cli.main(["--host", "omp", "--cwd", repo_dir, "toolprune", "apply"]) == 1
+        assert cli.main(["--host", "omp", "--cwd", repo_dir, "config", "set",
                          "loopguard=off"]) == 1
     finally:
         for d in (st.base, os.path.dirname(st.base)):
@@ -679,7 +614,7 @@ def test_a_change_where_the_state_is_read_only_is_refused_whole(tmp_path, env, m
     out = capsys.readouterr().out
     assert out.count("not changed: TokenEconomizer cannot write its state") == 2
     assert "Traceback" not in out
-    assert not os.path.exists(denylist.settings_path(repo_dir, "claude"))
+    assert denylist.applied_for(st, repo_dir) == []
     assert not os.path.exists(os.path.join(os.path.dirname(st.base), "config.json"))
     # ... and reading still works there
-    assert cli.main(["--host", "claude", "--cwd", repo_dir, "toolprune"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", repo_dir, "toolprune"]) == 0

@@ -4,20 +4,14 @@
 The package is found, in order:
 
   1. `$TE_CORE_PATH`                  -- a checkout you point at explicitly;
-  2. `<plugin root>/lib`              -- in the repository, a symlink to the package; Claude
-                                         Code's install copies the plugin directory into its
-                                         cache (even from a local marketplace) and follows it,
-                                         so the installed copy is self-contained. In the bundle
+  2. `<plugin root>/lib`              -- in the repository, a symlink to the package; an install
+                                         that copies the plugin directory follows it, so the
+                                         installed copy is self-contained. In the bundle
                                          `scripts/build_plugin.py` writes, a real copy;
-  3. `<plugin root>/..`               -- the repository this plugin directory lives in, for a
-                                         checkout whose symlinks were not created (`--plugin-dir`);
-  4. the marketplace it came from    -- Codex's install copies the plugin directory but drops
-                                         the `lib` symlink; for a copy under
-                                         `<CODEX_HOME>/plugins/cache/<marketplace>/...`, the
-                                         checkout `config.toml` names as that marketplace's
-                                         `source` (the clone a local marketplace was added
-                                         from), or Codex's own checkout of a git marketplace,
-                                         `<CODEX_HOME>/.tmp/marketplaces/<marketplace>`;
+  3. `lib/tokeneconomizer` as a stub -- the plain file holding the symlink's target, which git
+                                         writes on Windows without symlink support;
+  4. `<plugin root>/..`               -- the checkout this plugin directory lives in, for a
+                                         checkout whose `lib` link was not created;
   5. an installed package            -- `pip install` of the repository.
 
 When none has it, a hook answers `{}` as always, and says why once in the plugin's errors.log.
@@ -26,73 +20,9 @@ This file must stay importable by any Python 3 so that an old interpreter can st
 hook with `{}` instead of a syntax error: no f-strings, no annotations, nothing newer than 3.0.
 """
 import os
-import re
 import sys
 
 MIN_VERSION = (3, 10)
-
-# `source = ...` in Codex's config.toml: a TOML basic string ("...", with escapes) or a literal
-# one ('...', as written), which Codex writes for a path with backslashes (0.163.0, Windows).
-_SOURCE = re.compile(r'''source\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')''')
-
-
-def _toml_string(basic, literal):
-    r"""A `source` value: a literal string as written; a basic string with its `\\` and `\"`
-    undone, any other backslash kept, as a path pasted between double quotes has them."""
-    if literal is not None:
-        return literal
-    return re.sub(r'\\([\\"])', r'\1', basic)
-
-
-def _without_long_prefix(path):
-    r"""`path` without the extended-length prefix Codex puts on a local source on Windows:
-    `\\?\C:\src` is `C:\src`, and `\\?\UNC\server\share` is `\\server\share`."""
-    if path.startswith("\\\\?\\UNC\\"):
-        return "\\\\" + path[8:]
-    if path.startswith("\\\\?\\"):
-        return path[4:]
-    return path
-
-
-def _marketplace_sources(plugin_root):
-    """For a Codex install copy (`<home>/plugins/cache/<marketplace>/<plugin>/<version>`), the
-    `source` its `config.toml` records for that marketplace (a local one), and the checkout Codex
-    keeps of a git one."""
-    parts = plugin_root.rstrip(os.sep).split(os.sep)
-    if len(parts) < 6 or parts[-4] != "cache" or parts[-5] != "plugins":
-        return []
-    home, market = os.sep.join(parts[:-5]), parts[-3]
-    out = [os.path.join(home, ".tmp", "marketplaces", market)]
-    # Claude Code keeps the same cache layout under `~/.claude/plugins/cache/`; on a checkout
-    # without symlinks (Windows) the copy has no `lib`, so the package is found in the clone
-    # its `known_marketplaces.json` records for this marketplace.
-    try:
-        import json
-        known = json.load(open(os.path.join(home, "plugins", "known_marketplaces.json"),
-                               encoding="utf-8"))
-        entry = known.get(market) or {}
-        source = entry.get("source") or {}
-        for cand in (source.get("path"), entry.get("installLocation")):
-            if cand:
-                out.append(cand)
-    except (IOError, OSError, ValueError, AttributeError):
-        pass
-    try:
-        text = open(os.path.join(home, "config.toml"), encoding="utf-8", errors="replace").read()
-    except (IOError, OSError):
-        return out
-    section = None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("["):
-            section = line.strip("[]").strip().replace('"', "").replace("'", "")
-            continue
-        m = _SOURCE.match(line)
-        if m and section == "marketplaces." + market:
-            source = _without_long_prefix(_toml_string(m.group(1), m.group(2)))
-            if source:
-                out.append(source)
-    return out
 
 
 def _symlink_stub(plugin_root):
@@ -110,9 +40,8 @@ def _symlink_stub(plugin_root):
 
 def core_path():
     plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for cand in ([os.environ.get("TE_CORE_PATH"), os.path.join(plugin_root, "lib"),
-                  _symlink_stub(plugin_root), os.path.dirname(plugin_root)]
-                 + _marketplace_sources(plugin_root)):
+    for cand in (os.environ.get("TE_CORE_PATH"), os.path.join(plugin_root, "lib"),
+                 _symlink_stub(plugin_root), os.path.dirname(plugin_root)):
         if cand and os.path.isfile(os.path.join(cand, "tokeneconomizer", "plugin", "hook.py")):
             return cand
     return None

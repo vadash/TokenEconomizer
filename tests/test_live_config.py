@@ -161,7 +161,7 @@ def _messages(outs):
 
 def test_a_guard_turned_off_in_the_repository_file_never_intervenes(env, repo):
     _warm(env, repo)
-    path = os.path.join(repo_state_dir(repo_identity(repo, env), "claude", env), "..",
+    path = os.path.join(repo_state_dir(repo_identity(repo, env), "omp", env), "..",
                         "config.json")
     write_config(os.path.normpath(path), {"spiral": "off"})
     assert all(o == {} for o in _turn(env, repo, "s", "stuck", stuck_calls(40)))
@@ -188,7 +188,7 @@ def test_injection_off_and_a_tight_fact_cap_keep_the_context_clean(env, repo, tm
         run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
     off = run_session(dict(env, TE_MICROSKILLS="off"), repo, "s4",
                       trap_session(str(tmp_path / "s4.jsonl"), repo, 4))
-    assert off == {}                                     # `envfacts` injects here
+    assert "hookSpecificOutput" not in off and "systemMessage" not in off
     tight = dict(env, TE_INJECT_MAX_TOKENS="5")          # smaller than the block's header
     run_session(tight, repo, "s5", trap_session(str(tmp_path / "s5.jsonl"), repo, 5))
     after = run_session(tight, repo, "s6", trap_session(str(tmp_path / "s6.jsonl"), repo, 6))
@@ -239,7 +239,7 @@ def test_off_everywhere_and_on_in_one_repository_runs_only_there(env, repo, tmp_
 def _show(env, repo_path, monkeypatch):
     from tokeneconomizer.plugin import cli
     monkeypatch.setenv("TOKENECONOMIZER_HOME", env["TOKENECONOMIZER_HOME"])
-    return cli.main(["--host", "claude", "--cwd", repo_path, "config", "show"])
+    return cli.main(["--host", "omp", "--cwd", repo_path, "config", "show"])
 
 
 def test_show_creates_the_global_file_with_every_setting_at_its_default(env, repo, monkeypatch,
@@ -252,7 +252,8 @@ def test_show_creates_the_global_file_with_every_setting_at_its_default(env, rep
     settable = {f.name for f in fields(LiveConfig)} - {"warnings"}
     assert len(written) == len(settable) and set(written) == settable
     assert written["microskills"] == "off" and written["loopguard"] == "nudge"
-    assert written["toolprune_protect"] == [] and written["history_max_sessions"] == 200
+    assert written["toolprune_protect"] == [] and written["omp_paid_model"] == ""
+    assert written["omp_cli"] == "" and written["paid_model"] == ""
     raw = open(path, "rb").read()
     assert _show(env, repo, monkeypatch) == 0
     assert capsys.readouterr().out == first
@@ -277,5 +278,5 @@ def test_show_still_prints_when_the_home_cannot_hold_a_file(repo, tmp_path, monk
     blocker.write_text("x")
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(blocker / "home"))
     from tokeneconomizer.plugin import cli
-    assert cli.main(["--host", "claude", "--cwd", repo, "config", "show"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", repo, "config", "show"]) == 0
     assert json.loads(capsys.readouterr().out)["microskills"]["microskills"] == "off"

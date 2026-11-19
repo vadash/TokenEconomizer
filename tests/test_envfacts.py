@@ -1,6 +1,6 @@
 """Environment facts: micro-skills from generic detector families.
 
-Every scenario is a synthetic stream of tasks (Codex transcript schema unless stated). The
+Every scenario is a synthetic stream of tasks (omp session files). The
 assertions pin the four properties the mechanism exists for: facts FORM from recurring
 evidence, FIRE only while the waste recurs, ABSTAIN where the evidence says otherwise, and
 cost nothing (`opt_tokens == 0`).
@@ -11,7 +11,7 @@ import os
 from tokeneconomizer.microskills import EnvFactsDistiller, PrefixStage
 from tokeneconomizer.microskills import envfacts as ef, observe
 from tokeneconomizer.config import InjectionConfig
-from fixtures import write_codex_transcript, write_claude_transcript
+from fixtures import write_omp_session
 
 BASE = "/opt/env/base/bin/python"
 PROJ = "/opt/env/proj/bin/python"
@@ -28,7 +28,7 @@ def _edit(path):
 
 def _task(tmp_path, i, items):
     p = str(tmp_path / f"t{i}.jsonl")
-    write_codex_transcript(p, items)
+    write_omp_session(p, items)
     return p
 
 
@@ -358,26 +358,13 @@ def test_save_load_roundtrip(tmp_path):
     assert json.load(open(os.path.join(str(tmp_path), ef.STATE_SUBDIR, "acme__widget.json")))["opt_tokens"] == 0.0
 
 
-def test_claude_schema_yields_the_same_fact(tmp_path):
-    d = EnvFactsDistiller("acme/widget")
-    for i in range(4):
-        p = str(tmp_path / f"c{i}.jsonl")
-        write_claude_transcript(p, [
-            ("Edit", {"file_path": f"/testbed/pkg/c{i}.py"}, "ok"),
-            ("Bash", {"command": "python -m pytest tests/test_a.py -q"},
-             f"Exit code 1\n{BASE}: No module named pytest"),
-            ("Bash", {"command": f"{PROJ} -m pytest tests/test_a.py -q"}, "1 passed")])
-        d.render(); d.update(p, iid=f"c-{i}", resolved=True)
-    assert PROJ in d.render()
-
-
 def test_prefix_stage_envfacts_profile_needs_no_runner_and_reports_zero(tmp_path):
     cfg = InjectionConfig(enabled=True, profile="envfacts")
     stage = PrefixStage(cfg, "acme/widget", str(tmp_path), fresh=True, runner=None,
-                        agent="codex")
+                        agent="omp")
     assert stage.render() == ""
     rd = str(tmp_path / "run"); os.makedirs(rd)
-    write_codex_transcript(os.path.join(rd, "transcript.jsonl"), [
+    write_omp_session(os.path.join(rd, "transcript.jsonl"), [
         _cmd("python -m pytest -q", f"{BASE}: No module named pytest", 1),
         _cmd(f"{PROJ} -m pytest -q", "1 passed", 0)])
     srow = {"resolved": True}
@@ -387,7 +374,7 @@ def test_prefix_stage_envfacts_profile_needs_no_runner_and_reports_zero(tmp_path
     assert "form_repair:run_tests:python -m pytest" in srow["manual_facts"]
 
 
-# ---- rtk's Codex mode puts `rtk` in front of every command the agent types ----------------
+# ---- rtk puts `rtk` in front of every command the agent types ----------------
 def test_the_classifier_sees_through_rtks_command_prefix():
     """An agent told to type `rtk pytest`, `rtk git status`, `rtk proxy <cmd>` must still be
     read as running the tests, fetching, querying the repository. Pinned as bare == prefixed,

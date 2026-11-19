@@ -1,8 +1,8 @@
 """A cache write is billed by its lifetime: Anthropic charges 1.25x input for the 5-minute cache
 and 2x for the 1-hour one, and a message's usage says how its cache writes split between them
-(`cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`). Claude Code on a
-subscription writes to the 1-hour cache, so pricing every cache write at 1.25x understates such a
-session. A cache hit is billed at 0.1x input except on a few models (0.05x on Opus 5.5 and
+(`cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`). A session that
+writes to the 1-hour cache needs the split priced, or pricing every cache write at 1.25x
+understates it. A cache hit is billed at 0.1x input except on a few models (0.05x on Opus 5.5 and
 Sonnet 5.5, 0.025x on Fable and Mythos 5.1 and 5.2), and hits are most of a session's tokens."""
 import json
 
@@ -65,15 +65,12 @@ def test_the_split_is_read_from_an_anthropic_usage_object():
                                           "cache_creation": "not an object"}) == 0
 
 
-# ---- Claude Code transcripts -----------------------------------------------------------------
-def _message(mid, cache_write, split=None, blocks=2):
-    usage = {"input_tokens": 10, "cache_read_input_tokens": 1000,
-             "cache_creation_input_tokens": cache_write, "output_tokens": 50}
-    if split is not None:
-        usage["cache_creation"] = split
-    return [{"type": "assistant", "message": {
-        "id": mid, "model": "claude-opus-4-8", "role": "assistant", "usage": usage,
-        "content": [{"type": "text", "text": f"block {b}"}]}} for b in range(blocks)]
+# ---- omp session files --------------------------------------------------------------------
+# omp's usage names the 1-hour share of `cacheWrite` as `cacheWrite1h` (Anthropic only).
+def _usage(cache_write, one_hour):
+    return {"input": 10, "output": 50, "cacheRead": 1000, "cacheWrite": cache_write,
+            "cacheWrite1h": one_hour, "totalTokens": 1060 + cache_write,
+            "cost": {"total": 0.001}}
 
 
 def _transcript(path, entries):
@@ -81,79 +78,46 @@ def _transcript(path, entries):
     return str(path)
 
 
-def test_a_claude_session_reports_its_one_hour_cache_writes(tmp_path):
-    p = _transcript(tmp_path / "s.jsonl", [
-        *_message("m1", 300, {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 300}),
-        *_message("m2", 200, {"ephemeral_5m_input_tokens": 150, "ephemeral_1h_input_tokens": 50}),
-        *_message("m3", 100),                                   # an older entry: no split
-    ])
-    u = trace.claude_session_usage(p)
-    assert u["cache_creation_input_tokens"] == 600              # each message once, as before
-    assert u["cache_creation_1h_input_tokens"] == 350
-
-
-def test_a_split_on_a_message_that_reports_no_cache_writes_adds_nothing(tmp_path):
-    # Seen in real transcripts: every count 0, yet a `cache_creation` split that is not.
-    p = _transcript(tmp_path / "s.jsonl", [
-        *_message("m1", 0, {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 2948}),
-        *_message("m2", 80, {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": "x"}),
-    ])
-    u = trace.claude_session_usage(p)
-    assert u["cache_creation_input_tokens"] == 80
-    assert u["cache_creation_1h_input_tokens"] == 0
-
-
-# ---- the ledger ------------------------------------------------------------------------------
-def test_a_session_is_priced_with_its_one_hour_cache_writes(tmp_path):
-    p = _transcript(tmp_path / "s.jsonl", _message(
-        "m1", 1000, {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}))
-    eff, priced_by = accounting.effective(trace.claude_session_usage(p))
-    assert priced_by == "model"
-    assert eff == 10 + 1000 * 0.10 + 1000 * 2.0 + 50 * 5.0
-
-
-def test_a_claude_side_call_is_priced_from_the_usage_object_it_returns():
-    usage = {"input_tokens": 10, "cache_read_input_tokens": 0, "output_tokens": 0,
-             "cache_creation_input_tokens": 1000, "model": "claude-haiku-4-5",
-             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}}
-    assert accounting.effective(usage) == (10 + 1000 * 2.0, "model")
-
-
-def test_an_unpriced_model_keeps_the_fallback_cache_write_rate():
-    usage = {"input_tokens": 10, "cache_read_input_tokens": 0, "output_tokens": 0,
-             "cache_creation_input_tokens": 1000, "cache_creation_1h_input_tokens": 1000,
-             "model": "some-new-model"}
-    assert accounting.effective(usage) == (10 + 1000 * 1.25, "fallback")
-
-
-# ---- Pi sessions -----------------------------------------------------------------------------
-# Pi's usage names the 1-hour share of `cacheWrite` as `cacheWrite1h` (Anthropic only).
-def _pi_usage(cache_write, one_hour):
-    return {"input": 10, "output": 50, "cacheRead": 1000, "cacheWrite": cache_write,
-            "cacheWrite1h": one_hour, "totalTokens": 1060 + cache_write,
-            "cost": {"total": 0.001}}
-
-
-def test_a_pi_session_reports_its_one_hour_cache_writes(tmp_path):
-    lines = [{"type": "session", "version": 3, "id": "pi-1", "cwd": "/w/repo"},
+def _omp_session(path, usages, model="claude-opus-4-8"):
+    """An omp session tree whose assistant messages carry `usages`."""
+    lines = [{"type": "session", "version": 3, "id": "omp-1", "cwd": "/w/repo"},
              {"type": "message", "id": "e1", "parentId": None,
               "message": {"role": "user", "content": "fix the bug"}}]
-    for i, (cw, one_hour) in enumerate([(1000, 1000), (200, 50)], start=2):
+    for i, usage in enumerate(usages, start=2):
         lines.append({"type": "message", "id": f"e{i}", "parentId": f"e{i - 1}", "message": {
-            "role": "assistant", "provider": "anthropic", "model": "claude-opus-4-8",
-            "usage": _pi_usage(cw, one_hour), "content": [{"type": "text", "text": "ok"}]}})
-    u = trace.pi_session_usage(_transcript(tmp_path / "s.jsonl", lines))
+            "role": "assistant", "provider": "anthropic", "model": model,
+            "usage": usage, "content": [{"type": "text", "text": "ok"}]}})
+    return _transcript(path, lines)
+
+
+def test_an_omp_session_reports_its_one_hour_cache_writes(tmp_path):
+    p = _omp_session(tmp_path / "s.jsonl", [_usage(1000, 1000), _usage(200, 50)])
+    u = trace.omp_session_usage(p)
     assert u["cache_creation_input_tokens"] == 1200
     assert u["cache_creation_1h_input_tokens"] == 1050
     assert accounting.effective(u) == (
         20 + 2000 * 0.10 + 150 * 1.25 + 1050 * 2.0 + 100 * 5.0, "model")
 
 
-def test_a_pi_side_call_is_priced_with_its_one_hour_cache_writes():
+# ---- the ledger ------------------------------------------------------------------------------
+def test_a_session_is_priced_with_its_one_hour_cache_writes(tmp_path):
+    p = _omp_session(tmp_path / "s.jsonl", [_usage(1000, 1000)])
+    eff, priced_by = accounting.effective(trace.omp_session_usage(p))
+    assert priced_by == "model"
+    assert eff == 10 + 1000 * 0.10 + 1000 * 2.0 + 50 * 5.0
+
+def test_a_side_call_is_priced_from_the_usage_object_it_returns():
+    usage = {"input_tokens": 10, "cache_read_input_tokens": 0, "output_tokens": 0,
+             "cache_creation_input_tokens": 1000, "model": "claude-haiku-4-5",
+             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}}
+    assert accounting.effective(usage) == (10 + 1000 * 2.0, "model")
+
+
+def test_an_omp_side_call_is_priced_with_its_one_hour_cache_writes():
     run = [{"type": "message_end", "message": {
-        "role": "assistant", "model": "claude-haiku-4-5", "usage": _pi_usage(1000, 1000),
+        "role": "assistant", "model": "claude-haiku-4-5", "usage": _usage(1000, 1000),
         "content": [{"type": "text", "text": "- use python -m pytest"}]}}]
-    _, usage = trace.pi_json_reply("\n".join(json.dumps(e) for e in run))
+    _, usage = trace.omp_json_reply("\n".join(json.dumps(e) for e in run))
     usage.pop("cost_usd")
     assert accounting.effective(usage) == (10 + 1000 * 0.10 + 1000 * 2.0 + 50 * 5.0, "model")
 
@@ -184,12 +148,7 @@ def test_the_other_claude_models_keep_the_usual_cache_hit_fraction(model):
 
 
 def test_a_session_on_opus_5_5_is_priced_with_its_cheaper_cache_hits(tmp_path):
-    entries = [{"type": "assistant", "message": {
-        "id": "m1", "model": "claude-opus-5-5", "role": "assistant",
-        "usage": {"input_tokens": 10, "cache_read_input_tokens": 1000,
-                  "cache_creation_input_tokens": 0, "output_tokens": 50},
-        "content": [{"type": "text", "text": "x"}]}}]
-    eff, priced_by = accounting.effective(trace.claude_session_usage(_transcript(
-        tmp_path / "s.jsonl", entries)))
+    p = _omp_session(tmp_path / "s.jsonl", [_usage(0, 0)], model="claude-opus-5-5")
+    eff, priced_by = accounting.effective(trace.omp_session_usage(p))
     assert priced_by == "model"
     assert eff == 10 + 1000 * 0.05 + 50 * 5.0

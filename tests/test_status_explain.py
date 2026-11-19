@@ -19,7 +19,7 @@ def status(tmp_path, monkeypatch, capsys):
     repo.mkdir()
     env = {"TOKENECONOMIZER_HOME": str(tmp_path / "state"),
            "GIT_CEILING_DIRECTORIES": str(tmp_path)}
-    ctx = LiveContext.build(hosts.Codex(), str(repo), env, settle=False)
+    ctx = LiveContext.build(hosts.Omp(), str(repo), env, settle=False)
     ctx.config = LiveConfig(microskills="envfacts", toolprune="propose")
     monkeypatch.setenv("TOKENECONOMIZER_HOME", ctx.root)
     monkeypatch.setattr(cli, "_ctx", lambda args: ctx)
@@ -141,7 +141,8 @@ def test_applied_rules_belong_to_the_selected_checkout(status, same_checkout):
     ctx, run = status
     ctx.store.write("untool.json", {"sessions": 6, "proposal": ["goals"]})
     root = ctx.repo.root if same_checkout else os.path.join(ctx.repo.root, "other-clone")
-    denylist.write_applied(ctx.store, {denylist.settings_path(root, "codex"): ["goals"]})
+    key = denylist.OMP_LIST if same_checkout else os.path.join(root, "settings.json")
+    denylist.write_applied(ctx.store, {key: ["goals"]})
     out = run("--explain")
     assert ("deny rules recorded as applied for this checkout" in out) == same_checkout
     assert ("proposal awaiting approval" in out) != same_checkout
@@ -168,12 +169,11 @@ def test_no_proposal_does_not_automatically_mean_insufficient_evidence(status):
     assert "insufficient" not in out
 
 
-def test_unsupported_host_is_not_told_to_collect_a_catalog(status):
+def test_unsupported_host_needs_no_catalog_collection(status):
+    """omp is the only host: nothing is ever told to collect a catalog it cannot use."""
     ctx, run = status
-    ctx.host = hosts.Pi()
     out = run("--explain")
-    assert "tool pruning is not available on pi" in out
-    assert "refresh-catalog" not in out
+    assert "not available on" not in out
 
 
 def test_loopguard_uses_the_configured_warmup_and_does_not_infer_productivity(status):
@@ -189,7 +189,7 @@ def test_loopguard_uses_the_configured_warmup_and_does_not_infer_productivity(st
 
 def test_paused_model_calls_are_reported_without_exposing_the_error(status):
     ctx, run = status
-    Store(ctx.root).write("hosts/codex/sidecall.json", {"at": 1, "reason": "private error"})
+    Store(ctx.root).write("hosts/omp/sidecall.json", {"at": 1, "reason": "private error"})
     ctx.store.write("envelope.json", {"resolved_turns": [10] * 5})
     out = run("--explain")
     assert "judge calls paused after a sign-in failure; backstop remains active" in out
@@ -200,7 +200,7 @@ def test_paused_proposer_does_not_hide_facts_that_can_still_be_injected(status):
     ctx, run = status
     ctx.config.microskills = "envfacts+distiller"
     ctx.config.loopguard = "off"
-    Store(ctx.root).write("hosts/codex/sidecall.json", {"at": 1, "reason": "not signed in"})
+    Store(ctx.root).write("hosts/omp/sidecall.json", {"at": 1, "reason": "not signed in"})
     assert "model proposer paused after a sign-in failure" in run("--explain")
     ctx.store.write("injection.json", {"sessions": 4, "rendered": "- a cached fact"})
     out = run("--explain")
@@ -243,7 +243,7 @@ def test_followup_guidance_keeps_the_selected_repository_and_host(status):
 
 
 def test_explanation_does_not_spawn_jobs_call_models_or_change_saved_state(status, monkeypatch):
-    from tokeneconomizer.plugin import fold, sidecall, toolcheck
+    from tokeneconomizer.plugin import fold, sidecall
     ctx, run = status
     ctx.store.write("injection.json", {"sessions": 4, "rendered": ""})
     ctx.store.write("untool.json", {"sessions": 4, "proposal": ["goals"]})
@@ -251,8 +251,7 @@ def test_explanation_does_not_spawn_jobs_call_models_or_change_saved_state(statu
     def forbidden(*args, **kwargs):
         pytest.fail("explaining status must only inspect saved state")
 
-    for obj, name in ((ctx, "spawn"), (fold, "fold_session"), (sidecall, "runner_for"),
-                      (toolcheck, "measure")):
+    for obj, name in ((ctx, "spawn"), (fold, "fold_session"), (sidecall, "runner_for")):
         monkeypatch.setattr(obj, name, forbidden)
 
     def snapshot():
@@ -267,10 +266,10 @@ def test_explanation_does_not_spawn_jobs_call_models_or_change_saved_state(statu
 def test_explanations_follow_real_session_learning(status, tmp_path):
     from tests.test_live_hooks import run_session, trap_session
     ctx, run = status
-    ctx.host = hosts.ClaudeCode()
+    ctx.host = hosts.Omp()
     ctx.env.update(TE_FOLD_SYNC="1", TE_MICROSKILLS="envfacts",
                    TE_TOOLPRUNE="off", TE_LOOPGUARD="off")
-    # Rebuild for Claude's own state; each agent learns separately.
+    # Rebuild for omp's own state.
     learned = LiveContext.build(ctx.host, ctx.repo.root, ctx.env, settle=False)
     ctx.store, ctx.config = learned.store, learned.config
     assert "no learning snapshot recorded" in run("--explain")
@@ -291,7 +290,7 @@ def test_real_cli_selects_the_requested_repository_without_applying_a_pending_pr
                GIT_CEILING_DIRECTORIES=str(tmp_path), TE_MICROSKILLS="envfacts",
                TE_TOOLPRUNE="auto", TE_LOOPGUARD="nudge", TE_SHADOW="0", TE_DISABLE="0",
                PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
-    ctx = LiveContext.build(hosts.Codex(), str(repo), env, settle=False)
+    ctx = LiveContext.build(hosts.Omp(), str(repo), env, settle=False)
     ctx.store.write("injection.json", {"sessions": 2, "rendered": "", "facts": {
         "test-command": {"state": "CANDIDATE", "fire": "2/2", "inject": False}}})
     ctx.store.write("untool.json", {"sessions": 5, "proposal": ["goals"],
@@ -301,7 +300,7 @@ def test_real_cli_selects_the_requested_repository_without_applying_a_pending_pr
 
     def run(*options):
         result = subprocess.run(
-            [sys.executable, "-m", "tokeneconomizer.plugin.cli", "--host", "codex",
+            [sys.executable, "-m", "tokeneconomizer.plugin.cli", "--host", "omp",
              "--cwd", str(repo), "status", *options], env=env, cwd=elsewhere,
             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
             timeout=30)
@@ -319,5 +318,5 @@ def test_real_cli_selects_the_requested_repository_without_applying_a_pending_pr
     text = run("--explain")
     assert len(explanations(text)) == 3
     assert all(len(line) <= 160 for line in explanations(text))
-    assert not (repo / ".codex" / "config.toml").exists()
+    assert list(repo.iterdir()) == []    # omp keeps its deny list in plugin state, not the repo
     assert {p.name: p.read_bytes() for p in Path(ctx.store.base).glob("*.json")} == before

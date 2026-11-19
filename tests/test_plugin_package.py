@@ -1,10 +1,5 @@
-"""The installable plugin: manifests, hook files, launchers, and the self-contained bundle.
-
-These pin the packaging facts a host relies on and a refactor could silently break: every hook
-file runs the one launcher that exists and is executable, the Codex file names its host and keeps
-SessionEnd under Codex's three-second cap, the marketplace points at the plugin directory, the
-launcher fails open, and the bundle `scripts/build_plugin.py` writes runs with no checkout beside
-it -- which is what a marketplace install, copying only the plugin directory, actually gets.
+"""The installable omp-only plugin: launchers, the self-contained bundle, and the layering
+the README promises.
 """
 import json
 import os
@@ -23,7 +18,6 @@ PLUGIN = os.path.join(REPO, "plugin")
 
 # Windows runs no shebang: the launchers go through Git Bash's `sh`.
 SH = [git_sh() or "sh"] if os.name == "nt" else []
-EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"}
 
 
 def _json(*parts):
@@ -31,117 +25,31 @@ def _json(*parts):
         return json.load(fh)
 
 
-def _commands(hooks_doc):
-    for event, groups in hooks_doc["hooks"].items():
-        for group in groups:
-            for h in group["hooks"]:
-                yield event, group, h
+def test_the_plugin_ships_only_the_omp_surface():
+    """Every non-omp host's manifests, hooks, skills and extensions are gone; omp needs no
+    hook files (its extension calls `te-hook --host omp` itself)."""
+    for name in (".antigravity-plugin", ".claude-plugin", ".codex-plugin", ".cursor-plugin",
+                 ".factory-plugin", ".github", "codex-skills", "pi", "opencode", "hermes",
+                 "commands", "hooks.json"):
+        assert not os.path.exists(os.path.join(PLUGIN, name)), name
+    assert not [n for n in os.listdir(os.path.join(PLUGIN, "hooks")) if n.endswith(".json")]
+    assert os.path.isfile(os.path.join(PLUGIN, "omp", "tokeneconomizer.ts"))
+    for name in ("te_bootstrap.py", "te", "te-hook", "te.cmd", "te-hook.cmd"):
+        assert os.path.isfile(os.path.join(PLUGIN, "scripts", name)), name
+    assert os.path.exists(os.path.join(PLUGIN, "lib", "tokeneconomizer"))
+    names = set(os.listdir(os.path.join(PLUGIN, "slash-commands")))
+    assert {"microskills.md", "facts.md", "toolprune.md", "untool.md"} <= names
 
 
-def test_manifests_agree_on_identity():
-    claude = _json(PLUGIN, ".claude-plugin", "plugin.json")
-    codex = _json(PLUGIN, ".codex-plugin", "plugin.json")
-    # Copilot reads `.github/plugin/plugin.json` in preference to `.claude-plugin/` (verified on
-    # 1.0.83: only the hooks it names ran), which is how it gets a hook file of its own.
-    copilot = _json(PLUGIN, ".github", "plugin", "plugin.json")
-    assert claude["name"] == codex["name"] == copilot["name"] == "tokeneconomizer"
-    assert claude["version"] == codex["version"] == copilot["version"]
-    assert codex["hooks"] == "./hooks/codex-hooks.json"
-    assert copilot["hooks"] == "hooks/copilot-hooks.json"
-    for m in (codex, copilot):
-        assert os.path.exists(os.path.join(PLUGIN, m["hooks"]))
-    assert "hooks" not in claude              # Claude Code reads hooks/hooks.json by convention
-
-
-@pytest.mark.parametrize("name,host", [("hooks.json", None), ("codex-hooks.json", "codex"),
-                                       ("copilot-hooks.json", "copilot")])
-def test_hook_files_run_the_launcher_on_every_event(name, host):
-    doc = _json(PLUGIN, "hooks", name)
-    # no PreToolUse: the plugin never blocks a call. Claude Code and Copilot report a failed
-    # tool in an event of its own, which the guard must see too.
-    want = EVENTS | ({"PostToolUseFailure"} if host in (None, "copilot") else set())
-    assert set(doc["hooks"]) == want
-    launcher = os.path.join(PLUGIN, "scripts", "te-hook")
-    assert os.access(launcher, os.X_OK)
-    for event, group, h in _commands(doc):
-        assert h["type"] == "command" and "/scripts/te-hook" in h["command"]
-        assert "matcher" not in group                     # PostToolUse watches every tool
-        if host:
-            assert f"--host {host}" in h["command"]
-        if host == "copilot":
-            assert h["command"].startswith('"${PLUGIN_ROOT}/scripts/te-hook"')
-            assert "te_bootstrap.py" in h["windows"] and "'--host', 'copilot'" in h["windows"]
-            assert h["windows"] == next(_commands(doc))[2]["windows"]
-        if host == "codex":
-            assert h["commandWindows"] == CODEX_WINDOWS
-            if event == "SessionEnd":
-                assert h["timeout"] <= 3                  # Codex's cap for SessionEnd
-        else:
-            assert "commandWindows" not in h
-
-
-# Codex on Windows runs a hook's `commandWindows` in a native shell, cmd.exe or PowerShell, where
-# `command`'s sh syntax means nothing (0.164.0). This one reads the same in both: Python finds the
-# plugin in the environment Codex sets, so no path or variable is on the line; the code has no
-# space, double quote, `%` or `$`; and `--%`, PowerShell's stop-parsing token, keeps its `;` and
-# parentheses from PowerShell, while cmd.exe passes it on to Python as `-X --%`, which Python
-# ignores (PowerShell drops it, so there `-X` takes the `-u` instead).
-CODEX_WINDOWS = (
-    "python -X --% -u -X utf8 -c e=__import__('os').environ;r=e.get('PLUGIN_ROOT')"
-    "or(e['CLAUDE_PLUGIN_ROOT']);s=__import__('sys');"
-    "s.argv[:]=[r+'/scripts/te_bootstrap.py','hook','--host','codex'];"
-    "__import__('runpy').run_path(s.argv[0],run_name='__main__')")
-
-
-@pytest.mark.parametrize("shell", ["cmd", "powershell"])
-def test_codex_windows_command_runs_the_hook_as_either_shell_passes_it(tmp_path, shell):
-    """Each shell's reading of `commandWindows`, as the argv Python receives: cmd.exe passes the
-    line on as it is, PowerShell without its `--%`. Neither has a quote to strip."""
-    argv = CODEX_WINDOWS.split()
-    if shell == "powershell":
-        argv.remove("--%")
-    assert argv[0] == "python"
-    work = tmp_path / "work"
-    work.mkdir()
-    payload = {"hook_event_name": "SessionStart", "session_id": "s", "cwd": str(work),
-               "source": "startup", "turn_id": "t"}
-    p = subprocess.run([sys.executable] + argv[1:], input=json.dumps(payload),
-                       capture_output=True, text=True, timeout=60,
-                       env=_hook_env(tmp_path, PLUGIN_ROOT=PLUGIN))
-    assert p.returncode == 0 and json.loads(p.stdout) == {}, p.stderr[-1000:]
-    assert list((tmp_path / "home" / "repos").glob("*/codex/sessions/s.json"))   # it ran
-    assert not os.path.exists(tmp_path / "home" / "errors.log")
-
-
-def test_marketplace_lists_the_plugin_directory():
-    m = _json(REPO, ".claude-plugin", "marketplace.json")
-    entry = {p["name"]: p for p in m["plugins"]}["tokeneconomizer"]
-    assert entry["source"] == "./plugin"
-    assert os.path.isdir(os.path.join(REPO, entry["source"], ".claude-plugin"))
-
-
-def test_no_bin_directory():
-    """Files in a plugin's bin/ go on the Bash tool's PATH, and claude.ai will not install a
-    plugin that has one; the launchers live in scripts/."""
-    assert not os.path.exists(os.path.join(PLUGIN, "bin"))
-
-
-def _run_hook(launcher, payload, env):
+def _run_hook(launcher, payload, env, cwd=None):
     p = subprocess.run(SH + [launcher], input=json.dumps(payload), capture_output=True, text=True,
-                       env=env, timeout=60)
+                       env=env, timeout=60, cwd=cwd or os.getcwd())
     return p.returncode, p.stdout, p.stderr
 
 
 # What every Windows process inherits, whatever runs it: the launchers know Windows by `OS`, and
 # Python and Git need the rest to start.
 WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
-
-
-# Where Windows PowerShell 5.1 finds its module analysis cache, where one is set: GitHub's Windows
-# image builds it ahead of time there. Without it, every launch analyzes each installed module
-# again before its first cmdlet (`Get-Content`, `Join-Path`): 12-18 s per launch on the runner,
-# against 0.4 s with it (measured in #238). pwsh starts as fast either way.
-POWERSHELL_ENV = ("PSMODULEANALYSISCACHEPATH",)
 
 
 def _hook_env(tmp_path, **extra):
@@ -152,204 +60,13 @@ def _hook_env(tmp_path, **extra):
     return env
 
 
-def _powershell_env(tmp_path, **extra):
-    """`_hook_env` plus where Windows PowerShell keeps its module analysis cache."""
-    env = _hook_env(tmp_path)
-    env.update({k: os.environ[k] for k in POWERSHELL_ENV if os.name == "nt" and k in os.environ})
-    env.update(extra)
-    return env
-
-
-POWERSHELLS = [p for p in (shutil.which("powershell"), shutil.which("pwsh")) if p]
-
-
-def _powershell_copilot(tmp_path, shell, policy):
-    """A Copilot plugin copy under a path with a quote and a space, its working folder, and a
-    `run(script, payload)` that runs PowerShell text there as the Copilot CLI does."""
-    work = tmp_path / "work space \u00e9"
-    work.mkdir()
-    scripts = tmp_path / "plugin's copy" / "scripts"
-    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable, TE_CORE_PATH=REPO,
-                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
-    env["PATH"] = os.path.dirname(sys.executable)
-
-    def run(script, payload=None):
-        flags = ["-ExecutionPolicy", policy] if policy else []
-        return subprocess.run([shell, "-NoProfile"] + flags + ["-Command", script],
-                              input=payload, capture_output=True, encoding="utf-8",
-                              env=env, cwd=work, timeout=60)
-    return work, env, run
-
-
-def _copilot_windows_hook():
-    return next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
-
-
-def _powershell_block(name):
-    text = open(os.path.join(PLUGIN, "slash-commands", name + ".md"), encoding="utf-8").read()
-    return re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
-
-
-@pytest.mark.powershell
-@pytest.mark.parametrize("shell", POWERSHELLS or [None])
-@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
-@pytest.mark.parametrize("policy", [None, "Restricted"])
-@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
-def test_powershell_hook_without_git_bash(tmp_path, shell, event, policy):
-    """Either event records the session and leaves the launch information (`bin/te.json`) the
-    slash commands read."""
-    work, _env, run = _powershell_copilot(tmp_path, shell, policy)
-    payload = json.dumps({"hook_event_name": event, "session_id": "s",
-                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
-    out = run(_copilot_windows_hook(), payload)
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    errors = tmp_path / "home" / "errors.log"
-    assert not errors.exists(), errors.read_text(encoding="utf-8")
-    sessions = list((tmp_path / "home" / "repos").glob("*/copilot/sessions/s.json"))
-    assert sessions, (out.stdout, out.stderr)
-    assert json.loads(sessions[0].read_text(encoding="utf-8"))["cwd"] == str(work)
-    assert (tmp_path / "home" / "bin" / "te.json").exists()
-
-
-@pytest.mark.powershell
-@pytest.mark.parametrize("shell", POWERSHELLS or [None])
-@pytest.mark.parametrize("policy", [None, "Restricted"])
-@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
-def test_powershell_slash_commands_without_git_bash(tmp_path, shell, policy):
-    """The slash commands run from the launch information a hook left, and the hook also takes
-    its payload from the pipeline and answers with no Python at all. None of this depends on
-    which event the hook saw (test_powershell_hook_without_git_bash covers both), so it runs
-    once per shell and policy: each line here is a PowerShell launch, seconds apiece on CI."""
-    work, env, run = _powershell_copilot(tmp_path, shell, policy)
-    command = _copilot_windows_hook()
-    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "s",
-                          "cwd": str(work), "source": "new"}, ensure_ascii=False)
-    out = run(command, payload)
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    for name in ("status", "config", "repos", "microskills", "facts", "toolprune", "untool"):
-        out = run(_powershell_block(name).replace("$ARGUMENTS", ""))
-        assert out.returncode == 0 and out.stdout.strip(), (name, out.stderr)
-    out = run(_powershell_block("config").replace("$ARGUMENTS", "set loopguard=off"))
-    assert out.returncode == 0, out.stderr
-    settings = list((tmp_path / "home" / "repos").glob("*/config.json"))
-    assert settings and json.loads(settings[0].read_text())["loopguard"] == "off"
-    out = run(f"'{payload.replace(chr(39), chr(39) * 2)}' | {command}")
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    env.update(PATH="", TE_PYTHON=str(tmp_path / "missing.exe"))
-    out = run(command, payload)
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
-
-
-@pytest.mark.powershell
-@pytest.mark.parametrize("shell", POWERSHELLS or [None])
-@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
-def test_native_powershell_arguments_exit_code_and_aliases_under_restricted(tmp_path, shell):
-    from tokeneconomizer.plugin.paths import ensure_launcher
-
-    work = tmp_path / "work space \u00e9"
-    work.mkdir()
-    scripts = tmp_path / "plugin's copy" / "scripts"
-    shutil.copytree(os.path.join(PLUGIN, "scripts"), scripts,
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    (scripts / "te_bootstrap.py").write_text(
-        "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\nsys.exit(7)\n")
-    env = _powershell_env(tmp_path, TE_PYTHON=sys.executable,
-                          COPILOT_PLUGIN_ROOT=str(scripts.parent))
-    ensure_launcher(dict(env, TE_PLUGIN_ROOT=str(scripts.parent)))
-
-    def run(command, payload=None):
-        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
-                               command], input=payload, capture_output=True, encoding="utf-8",
-                              env=env, cwd=work, timeout=60)
-
-    text = open(os.path.join(PLUGIN, "slash-commands", "config.md"), encoding="utf-8").read()
-    command = re.search(r"```powershell\n(.*?)\n```", text, re.S).group(1)
-    command = command.replace("$ARGUMENTS", "set 'paid_model=a&b' 'a|b' 'a%PATH%b'")
-    out = run(command + "; exit $LASTEXITCODE")
-    assert out.returncode == 7, out.stderr
-    assert json.loads(out.stdout) == ["cli", "--host", "copilot", "--cwd", str(work),
-                                     "config", "set", "paid_model=a&b", "a|b", "a%PATH%b"]
-
-    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
-    winapps = tmp_path / "Microsoft" / "WindowsApps"
-    winapps.mkdir(parents=True)
-    marker = tmp_path / "alias_called"
-    alias = winapps / "python3.cmd"
-    alias.write_text(f'@echo alias>"{marker}"\n@exit /b 1\n')
-    env.update(TE_PYTHON="", PATH=os.pathsep.join((str(winapps), os.path.dirname(sys.executable))))
-    out = run(command, "{}")
-    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
-    assert not marker.exists()
-    env["PATH"] = str(winapps)
-    out = run(command, "{}")
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert marker.exists()
-    assert "no Python" in (tmp_path / "home" / "errors.log").read_text()
-    alias.write_text(f'@"{sys.executable}" %*\n')
-    out = run(command, "{}")
-    assert out.returncode == 7 and json.loads(out.stdout) == ["hook", "--host", "copilot"], out.stderr
-
-
-@pytest.mark.powershell
-@pytest.mark.parametrize("shell", POWERSHELLS or [None])
-@pytest.mark.skipif(os.name != "nt" or not POWERSHELLS, reason="native Windows PowerShell")
-def test_windows_hook_skips_old_python_but_honors_explicit_choice(tmp_path, shell):
-    work = tmp_path / "work"
-    work.mkdir()
-    old = tmp_path / "old"
-    old.mkdir()
-    marker = tmp_path / "old_ran"
-    shim = old / "old.py"
-    shim.write_text(
-        "import runpy, sys\n"
-        "sys.argv.pop(0)\n"
-        "sys.version_info = (3, 9)\n"
-        "if '-c' in sys.argv:\n"
-        "    exec(sys.argv[sys.argv.index('-c') + 1])\n"
-        "else:\n"
-        f"    open({str(marker)!r}, 'w').close()\n"
-        "    runpy.run_path(sys.argv[0], run_name='__main__')\n",
-        encoding="utf-8")
-    (old / "python3.cmd").write_text(f'@"{sys.executable}" "{shim}" %*\n')
-    new = tmp_path / "new"
-    new.mkdir()
-    (new / "python.cmd").write_text(f'@"{sys.executable}" %*\n')
-    env = _powershell_env(tmp_path, COPILOT_PLUGIN_ROOT=PLUGIN, TE_PYTHON="",
-                          PATH=os.pathsep.join((str(old), str(new))))
-    command = next(_commands(_json(PLUGIN, "hooks", "copilot-hooks.json")))[2]["windows"]
-    payload = json.dumps({"hook_event_name": "SessionStart", "session_id": "version-test",
-                          "cwd": str(work), "source": "new"})
-
-    def run():
-        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Restricted", "-Command",
-                               command], input=payload, capture_output=True, encoding="utf-8",
-                              env=env, cwd=work, timeout=60)
-
-    out = run()
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert list((tmp_path / "home" / "repos").glob("*/copilot/sessions/version-test.json"))
-    assert not marker.exists()
-    env["PATH"] = str(old)
-    out = run()
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert marker.exists()
-    marker.unlink()
-    env.update(PATH=str(new), TE_PYTHON=str(old / "python3.cmd"))
-    out = run()
-    assert out.returncode == 0 and json.loads(out.stdout) == {}, out.stderr
-    assert marker.exists()
-
-
 def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
                              {"hook_event_name": "SessionStart", "session_id": "s",
                               "cwd": str(work), "source": "startup"}, _hook_env(tmp_path))
-    assert code == 0 and json.loads(out) == {}
+    assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
     assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
 
 
@@ -372,7 +89,7 @@ def test_on_windows_the_launcher_prefers_python_outside_windowsapps(tmp_path):
                               "cwd": str(work), "source": "startup"},
                              _hook_env(tmp_path, OS="Windows_NT",
                                        PATH=f"{winapps}:{pybin}:{os.environ.get('PATH', '')}"))
-    assert code == 0 and json.loads(out) == {}
+    assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
     assert os.path.isdir(tmp_path / "home" / "repos")
     assert not (tmp_path / "alias_called").exists()
 
@@ -416,7 +133,7 @@ def test_the_launcher_skips_a_python3_older_than_the_bootstrap_needs(tmp_path):
                              {"hook_event_name": "SessionStart", "session_id": "s",
                               "cwd": str(work), "source": "startup"},
                              _hook_env(tmp_path, PATH=f"{old.parent}:{new.parent}:/usr/bin:/bin"))
-    assert code == 0 and json.loads(out) == {}
+    assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
     assert os.path.isdir(tmp_path / "home" / "repos")      # the new Python ran the dispatcher
     assert not (tmp_path / "old_ran").exists()
 
@@ -459,6 +176,20 @@ def test_te_python_runs_as_named_even_beside_a_newer_python(tmp_path):
     assert (tmp_path / "old_ran").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="the Windows .cmd launcher")
+def test_the_cmd_hook_launcher_fails_open_without_python(tmp_path):
+    """`te-hook.cmd` with no Python anywhere answers no change: a hook never fails the agent."""
+    env = {k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP", "OS")
+           if k in os.environ}
+    env["PATH"] = ""
+    work = tmp_path / "work"
+    work.mkdir()
+    p = subprocess.run(["cmd.exe", "/c", os.path.join(PLUGIN, "scripts", "te-hook.cmd")],
+                       input="{}", capture_output=True, text=True, env=env, cwd=str(work),
+                       timeout=60)
+    assert p.returncode == 0 and p.stdout.strip() == "{}"
+
+
 def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch):
     sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
     try:
@@ -477,29 +208,25 @@ def test_the_bootstrap_answers_no_change_on_an_old_python(tmp_path, monkeypatch)
 def test_the_bundle_runs_without_a_checkout(tmp_path):
     out = tmp_path / "market"
     subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_plugin.py"),
-                    "--out", str(out)], check=True, capture_output=True)
+                    "--out", str(out)], check=True, capture_output=True, stdin=subprocess.DEVNULL)
     bundle = out / "tokeneconomizer"
     assert (bundle / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
-    assert not (bundle / "lib" / "te_live").exists()
-    assert (bundle / ".github" / "plugin" / "plugin.json").exists()
-    assert (bundle / "hooks" / "copilot-hooks.json").exists()
-    assert (bundle / "hermes" / "plugin.yaml").exists()
-    assert (bundle / "hooks.json").exists()                        # Antigravity's, at the root
-    assert (bundle / ".antigravity-plugin" / "plugin.json").exists()
     assert (bundle / "lib" / "tokeneconomizer" / "__init__.py").exists()
+    assert (bundle / "omp" / "tokeneconomizer.ts").exists()       # the omp extension ships
+    assert not (bundle / ".claude-plugin").exists()                # no non-omp manifests ship
     assert not (bundle / "lib" / "te_harness").exists()
     assert not (bundle / "lib" / "te_bench").exists()
-    assert not list(bundle.rglob("__pycache__"))
-    m = json.loads((out / ".claude-plugin" / "marketplace.json").read_text())
-    assert m["plugins"][0]["source"] == "./tokeneconomizer"
+
     work = tmp_path / "work"
     work.mkdir()
-    # Run the bundled launcher with the core reachable ONLY through the bundle's lib/.
+    # Run the bundled launcher with the core reachable ONLY through the bundle's lib/: the
+    # working folder is empty and the checkout is on no path the launcher reads.
     code, stdout, stderr = _run_hook(str(bundle / "scripts" / "te-hook"),
                                      {"hook_event_name": "SessionStart", "session_id": "s",
                                       "cwd": str(work), "source": "startup"},
-                                     _hook_env(tmp_path, PYTHONNOUSERSITE="1"))
-    assert code == 0 and json.loads(stdout) == {}, stderr
+                                     _hook_env(tmp_path, PYTHONNOUSERSITE="1"), cwd=str(work))
+    assert code == 0 and json.loads(stdout) == {"omp": {"denyTools": []}}, stderr
+    assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
     sys.path.insert(0, str(bundle / "scripts"))
     try:
         import importlib
@@ -556,7 +283,8 @@ def test_the_mechanisms_never_import_the_plugin_runtime():
              + "".join(f"import tokeneconomizer.{m}\n" for m in MECHANISMS)
              + "print(sorted(m for m in sys.modules if m.startswith('tokeneconomizer.plugin') "
                "or m.split('.')[0] in ('te_bench', 'te_harness', 'te_live')))")
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO)
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO,
+                         stdin=subprocess.DEVNULL)
     assert out.stdout.strip() == "[]", out.stdout + out.stderr
 
 
@@ -564,21 +292,20 @@ def test_the_plugin_ships_and_loads_no_benchmark_code():
     """The benchmark adapters, the facade, the workloads, the baselines and the benchmark-only
     controllers live with the experiments (`experiments/te_bench/`). The plugin's library is the
     package alone, and running every part of the plugin loads none of them."""
-    shipped = os.path.join(REPO, "tokeneconomizer")       # what lib/ links (below)
+    shipped = os.path.join(REPO, "tokeneconomizer")       # what lib/ carries
     assert sorted(n for n in os.listdir(shipped)
                   if os.path.isdir(os.path.join(shipped, n)) and n != "__pycache__") == sorted(
         MECHANISMS + ("plugin",))
     for gone in ("adapters", "mechanisms", "vendor", "facade.py", "workloads.py", "runner.py",
                  "arms.py", "baselines"):
         assert not os.path.exists(os.path.join(shipped, gone)), gone
-    for gone in ("codex_spiral.py", "spiral_stage.py", "nudge_guard.py"):
-        assert not any(gone in files for _, _, files in os.walk(shipped)), gone
-    mods = ("hook", "controller", "fold", "cli", "denylist", "toolcheck", "repomap",
-            "sidecall", "judge", "probe")
+    mods = ("hook", "controller", "fold", "cli", "denylist", "repomap",
+            "sidecall", "judge", "adapter", "hookqueue")
     probe = ("import sys\n" + "".join(f"import tokeneconomizer.plugin.{m}\n" for m in mods)
              + "print(sorted({m.split('.')[0] for m in sys.modules} "
                "& {'te_bench', 'te_harness', 'te_live'}))")
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO)
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO,
+                         stdin=subprocess.DEVNULL)
     assert out.stdout.strip() == "[]", out.stdout + out.stderr
 
 
@@ -600,69 +327,6 @@ def test_the_package_is_stdlib_only_and_never_touches_the_benchmark_harness():
                 # tomllib: standard library from 3.11, imported behind an ImportError guard
                 assert root in sys.stdlib_module_names or root in (
                     "tokeneconomizer", "tomllib"), f"{path} imports non-stdlib {mod}"
-
-
-def test_a_resumed_pi_conversation_keeps_the_section_it_carries():
-    """Pi rebuilds a conversation's system message from its system entries, so a resumed one is
-    given back the facts section it carries, byte for byte: unwrapped from the `<name>` tags Pi
-    stores it in (Pi wraps it again), gone once a patch removed it, and as a compaction restated
-    it. Run through Node, which loads the extension's TypeScript directly."""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is not installed")
-    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
-    script = """
-const { pathToFileURL } = await import("node:url");      // Windows: a path is no import URL
-const { carriedSection } = await import(pathToFileURL(process.argv[1]).href);
-const sys = (sections) => ({ type: "message", message: { role: "system", sections } });
-const compact = (sections) => ({ type: "compaction", systemMessage: { sections } });
-const user = { type: "message", message: { role: "user" } };
-const facts = sys({ tokeneconomizer: "<tokeneconomizer>\\nFacts:\\n- one\\n</tokeneconomizer>" });
-console.log(JSON.stringify([
-  carriedSection([]),
-  carriedSection([facts, user]),
-  carriedSection([facts, sys({ cwd: "<cwd>\\n/x\\n</cwd>" })]),
-  carriedSection([facts, sys({ tokeneconomizer: null })]),
-  carriedSection([facts, compact({ cwd: "c" })]),
-  carriedSection([compact(facts.message.sections)]),
-]));
-"""
-    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
-                          "--input-type=module", "-e", script, ext],
-                         capture_output=True, text=True, timeout=60)
-    if run.returncode and "strip-types" in run.stderr:
-        pytest.skip("this node cannot load TypeScript")
-    assert run.returncode == 0, run.stderr
-    facts = "Facts:\n- one"
-    assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
-
-
-def test_the_plugin_directory_is_also_a_pi_package():
-    """One directory, three agents: Pi loads the extension its `pi` manifest names, and that
-    extension drives the same launchers the Claude Code and Codex hooks run."""
-    pkg = _json(PLUGIN, "package.json")
-    assert "pi-package" in pkg["keywords"]
-    (ext,) = pkg["pi"]["extensions"]
-    src = open(os.path.join(PLUGIN, ext), encoding="utf-8").read()
-    assert 'join(HERE, "..", "scripts")' in src and '"te-hook", ["--host", "pi"]' in src
-    # Exactly the dispatcher's five events. Not `tool_call`, the one Pi event that can block a
-    # call before it runs: the plugin guards nothing, on Pi as on the hook hosts.
-    assert set(re.findall(r'pi\.on\("(\w+)"', src)) == {
-        "session_start", "before_agent_start", "tool_result", "agent_end", "session_shutdown"}
-    # The repository root is the same package for `pi install git:github.com/...`, which clones
-    # the repository and reads the manifest at its root: same package, same extension file.
-    root = _json(os.path.dirname(PLUGIN), "package.json")
-    (root_ext,) = root["pi"]["extensions"]
-    assert os.path.realpath(os.path.join(os.path.dirname(PLUGIN), root_ext)) == \
-        os.path.realpath(os.path.join(PLUGIN, ext))
-    # `omp` names its own extension path in each package, so those two entries differ by the
-    # directory they are read from; every other field must match.
-    assert {k: v for k, v in root.items() if k not in ("pi", "omp")} == \
-        {k: v for k, v in pkg.items() if k not in ("pi", "omp")}
-    # no lockfile: Claude Code installs a plugin's npm dependencies only when one exists,
-    # and this package has none to install (the Pi API is a peer dependency)
-    assert not any(os.path.exists(os.path.join(PLUGIN, f)) for f in
-                   ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"))
 
 
 def test_the_omp_manifest_names_its_own_extension():
@@ -691,139 +355,46 @@ def test_the_omp_manifest_names_its_own_extension():
         "session_shutdown"}
 
 
-@pytest.mark.skipif(not os.path.islink(os.path.join(PLUGIN, "lib", "tokeneconomizer")),
-                    reason="checkout without symlinks (Windows): see the known_marketplaces test")
-def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_path):
-    """Claude Code installs a COPY of plugin/ into its cache, even from a local checkout, so the
-    core must be reachable from inside plugin/."""
+@pytest.mark.skipif(not os.path.exists(os.path.join(PLUGIN, "lib", "tokeneconomizer")),
+                    reason="core not linked into plugin/lib on this checkout")
+def test_the_plugin_carries_the_core_an_install_copy_follows(tmp_path):
+    """An install copies plugin/ into its cache, even from a local checkout, so the core must
+    be reachable from inside plugin/ (as a symlink, or as the stub file Windows writes)."""
     import shutil
     assert os.listdir(os.path.join(PLUGIN, "lib")) == ["tokeneconomizer"]
     link = os.path.join(PLUGIN, "lib", "tokeneconomizer")
-    assert os.path.islink(link)
-    # Windows reports the target with its own separator
-    assert os.readlink(link).replace(os.sep, "/") == "../../tokeneconomizer"
-    assert os.path.isfile(os.path.join(link, "plugin", "hook.py"))
-    # What an install does: copy the directory, following links. The copy runs on its own.
+    if os.path.islink(link):
+        # Windows reports the target with its own separator
+        assert os.readlink(link).replace(os.sep, "/") == "../../tokeneconomizer"
+    else:
+        assert open(link, encoding="utf-8").read().strip() == "../../tokeneconomizer"
+    assert os.path.isfile(os.path.join(REPO, "tokeneconomizer", "plugin", "hook.py"))
+    # What an install does: copy the directory, following links. The copy runs on its own,
+    # through the bootstrap directly (no shell, so no agent's `sh` path handling is involved).
     copy = str(tmp_path / "cache" / "tokeneconomizer" / "0.1.0")
     shutil.copytree(PLUGIN, copy, symlinks=False,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    out = subprocess.run(SH + [os.path.join(copy, "scripts", "te"), "doctor"], capture_output=True,
-                         text=True, env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h")),
-                         timeout=60)
-    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
-
-
-def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp_path):
-    """Codex installs a COPY of plugin/ that drops the `lib` symlink (0.153.1), so the copy
-    finds the core through the marketplace's `source` in Codex's config.toml."""
-    import shutil
-    home = tmp_path / "codex"
-    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
-    shutil.copytree(PLUGIN, str(copy), symlinks=True,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
-    (copy / "lib").mkdir()
-
-    def te(source, literal=False):
-        # As Codex writes it: a TOML basic string (a JSON string is one), or on Windows, for a
-        # path with backslashes, a literal one (0.163.0).
-        value = f"'{source}'" if literal else json.dumps(source, ensure_ascii=False)
-        (home / "config.toml").write_text(
-            'check_for_update_on_startup = false\n\n[marketplaces.tokeneconomizer]\n'
-            f'source_type = "local"\nsource = {value}\n')
-        return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
-                              text=True, timeout=60, cwd=str(tmp_path),
-                              env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
-                                       TE_CORE_PATH="", PYTHONPATH=""))
-    out = te(REPO)
-    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
-    out = te(REPO, literal=True)
-    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
-    out = te(str(tmp_path / "nowhere"))
-    assert out.returncode == 1 and "core package was not found" in out.stderr
-    assert "was not found for the plugin at" in (tmp_path / "h" / "errors.log").read_text()
-    # A git marketplace (`codex plugin marketplace add owner/repo`): config.toml names the URL,
-    # and Codex keeps its checkout under .tmp/marketplaces (seen on 0.153.1).
-    (home / ".tmp" / "marketplaces").mkdir(parents=True)
-    try:
-        os.symlink(REPO, str(home / ".tmp" / "marketplaces" / "tokeneconomizer"))
-    except OSError:
-        pytest.skip("symlinks need privileges on Windows")
-    out = te("https://github.com/microsoft/TokenEconomizer.git")
-    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
-
-
-def test_the_codex_marketplace_source_is_read_in_either_toml_string_form(tmp_path):
-    r"""Codex on Windows writes a local marketplace's `source` as a TOML literal string, with the
-    extended-length prefix (0.163.0): `source = '\\?\C:\src\TokenEconomizer'`. A basic string
-    has its escapes undone, and another marketplace's `source` is not this one's."""
-    sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
-    try:
-        import te_bootstrap
-    finally:
-        sys.path.pop(0)
-    home = tmp_path / "codex"
-    home.mkdir()
-    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
-
-    def source(line):
-        (home / "config.toml").write_text(
-            "[marketplaces.other]\nsource = '/elsewhere'\n\n"
-            f'[marketplaces.tokeneconomizer]\nsource_type = "local"\n{line}\n', encoding="utf-8")
-        return te_bootstrap._marketplace_sources(str(copy))[1:]   # after Codex's git checkout
-
-    assert source(r"source = '\\?\C:\src\TokenEconomizer'") == [r"C:\src\TokenEconomizer"]
-    assert source(r"source = '\\?\UNC\server\share\TokenEconomizer'") == [
-        r"\\server\share\TokenEconomizer"]
-    assert source(r'source = "C:\\src\\Token \"Economizer\""') == [r'C:\src\Token "Economizer"']
-    assert source('source = "/home/me/TokenEconomizer"') == ["/home/me/TokenEconomizer"]
-
-
-def test_a_claude_install_copy_without_symlinks_finds_the_core_in_its_marketplace(tmp_path):
-    """On a checkout without symlinks (Windows), `lib/tokeneconomizer` is a file holding the
-    link's target, and Claude Code's install copy (`~/.claude/plugins/cache/...`) carries that
-    file, not the package. The copy finds the core through the marketplace Claude Code recorded
-    in `plugins/known_marketplaces.json`."""
-    home = tmp_path / "claude-home"
-    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
-    shutil.copytree(PLUGIN, str(copy), symlinks=True,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
-    (copy / "lib").mkdir()
-    (copy / "lib" / "tokeneconomizer").write_text("../../tokeneconomizer")
-
-    def te(path):
-        (home / "plugins" / "known_marketplaces.json").write_text(json.dumps(
-            {"tokeneconomizer": {"source": {"source": "directory", "path": path},
-                                 "installLocation": path}}))
-        return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
-                              text=True, timeout=60, cwd=str(tmp_path),
-                              env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
-                                       TE_CORE_PATH="", PYTHONPATH=""))
-    out = te(REPO)
-    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
-    out = te(str(tmp_path / "nowhere"))
-    assert out.returncode == 1 and "core package was not found" in out.stderr
-
-
-def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
-    """Codex has no plugin slash commands; its plugins carry skills. Ours live outside `skills/`,
-    which Claude Code and Copilot would load beside their slash commands. Codex lists a plugin's
-    skills under the plugin's name (0.163.0), so `status` is `$tokeneconomizer:status`, as the
-    slash command is `/tokeneconomizer:status`; each description names TokenEconomizer, which is
-    what a request in plain words, or a Codex that lists the bare name, matches on."""
-    from tokeneconomizer.plugin import cli
-    manifest = _json(PLUGIN, ".codex-plugin", "plugin.json")
-    assert manifest["skills"] == "./codex-skills"
-    assert not os.path.exists(os.path.join(PLUGIN, "skills"))
-    root = os.path.join(PLUGIN, "codex-skills")
-    subcommands = set(cli.build_parser()._subparsers._group_actions[0].choices)
-    names = sorted(os.listdir(root))
-    assert names == ["config", "microskills", "repos", "status", "toolprune"]
-    for name in names:
-        text = open(os.path.join(root, name, "SKILL.md"), encoding="utf-8").read()
-        assert text.startswith(f'---\nname: "{name}"\ndescription: >\n')
-        assert "TokenEconomizer" in text.split("\n")[3]
-        cmd = re.search(r'bin/te" --host codex --cwd "\$\(pwd\)" (\w+)', text)
-        assert cmd and cmd.group(1) in subcommands and cmd.group(1) == name
+    env = dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"), PYTHONNOUSERSITE="1")
+    env.pop("PYTHONPATH", None)
+    env.pop("TE_CORE_PATH", None)
+    env.pop("TE_PYTHON", None)
+    run = [sys.executable, os.path.join(copy, "scripts", "te_bootstrap.py"), "cli", "doctor"]
+    if os.path.islink(link):
+        out = subprocess.run(run, capture_output=True, text=True, env=env, timeout=60,
+                             stdin=subprocess.DEVNULL, cwd=str(tmp_path))
+        assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+    else:
+        # Windows without symlinks checks the link target out as a stub file: the copy names
+        # the checkout, not a package, so it runs with the checkout named explicitly, and says
+        # what is missing without it.
+        env["TE_CORE_PATH"] = REPO
+        out = subprocess.run(run, capture_output=True, text=True, env=env, timeout=60,
+                             stdin=subprocess.DEVNULL, cwd=str(tmp_path))
+        assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+        del env["TE_CORE_PATH"]
+        out = subprocess.run(run, capture_output=True, text=True, env=env, timeout=60,
+                             stdin=subprocess.DEVNULL, cwd=str(tmp_path))
+        assert out.returncode == 1 and "was not found" in out.stderr
 
 
 def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
@@ -836,7 +407,7 @@ def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
     for new, old in (("microskills", "facts"), ("toolprune", "untool")):
         outs = []
         for name in (new, old):
-            assert cli.main(["--cwd", str(work), "--host", "claude", name]) == 0
+            assert cli.main(["--cwd", str(work), "--host", "omp", name]) == 0
             outs.append(capsys.readouterr().out)
         assert outs[0] == outs[1] and outs[0]
         body = {}
@@ -846,31 +417,21 @@ def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
         assert body[new] == body[old] == new
 
 
-def test_toolprune_note_after_refresh_catalog(tmp_path, monkeypatch, capsys):
-    """Right after `refresh-catalog`, the repository has not folded a session with the catalog
-    yet; the note says so instead of asking for the command just run."""
+def test_toolprune_note_after_a_reported_catalog(tmp_path, monkeypatch, capsys):
+    """Until a session reports omp's tool catalog, the note says only observed tools are known;
+    once one is recorded, the note says it joins the evidence from the next session."""
     from tokeneconomizer.plugin import cli
     home = tmp_path / "home"
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(home))
     work = tmp_path / "work"
     work.mkdir()
-    assert cli.main(["--cwd", str(work), "--host", "claude", "toolprune"]) == 0
-    assert "without `te --host claude toolprune refresh-catalog`" in capsys.readouterr().out
-    (home / "hosts" / "claude").mkdir(parents=True)
-    (home / "hosts" / "claude" / "catalog.json").write_text("{}", encoding="utf-8")
-    assert cli.main(["--cwd", str(work), "--host", "claude", "toolprune"]) == 0
+    assert cli.main(["--cwd", str(work), "--host", "omp", "toolprune"]) == 0
+    assert "omp reports its tool catalog at each SessionStart" in capsys.readouterr().out
+    (home / "hosts" / "omp").mkdir(parents=True)
+    (home / "hosts" / "omp" / "catalog.json").write_text("{}", encoding="utf-8")
+    assert cli.main(["--cwd", str(work), "--host", "omp", "toolprune"]) == 0
     out = capsys.readouterr().out
     assert "joins this repository's evidence from its next session" in " ".join(out.split())
-    assert "without `te --host" not in out
-
-
-def test_codex_sees_no_claude_format_commands_folder():
-    """Codex turns a plugin's `commands/` folder into skills of its own, which would list every
-    command twice beside `codex-skills/`; Claude Code and Copilot read `slash-commands/` instead."""
-    assert not os.path.exists(os.path.join(PLUGIN, "commands"))
-    for manifest in (".claude-plugin/plugin.json", ".github/plugin/plugin.json"):
-        with open(os.path.join(PLUGIN, manifest), encoding="utf-8") as fh:
-            assert json.load(fh)["commands"] == "./slash-commands/"
 
 
 def _shipped_python():

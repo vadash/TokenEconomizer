@@ -21,7 +21,7 @@ def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
     work = tmp_path / "work"
     work.mkdir()
-    return ["--cwd", str(work), "--host", "claude"]
+    return ["--cwd", str(work), "--host", "omp"]
 
 
 def test_help_prints_one_line_per_user_facing_subcommand(tmp_path, monkeypatch, capsys):

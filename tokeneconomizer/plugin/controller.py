@@ -2,10 +2,7 @@
 
     SessionStart      inject the repository's micro-skills (cached by the last fold), and
                       fold any earlier session that ended without its SessionEnd being seen;
-                      the first time in a repository (Claude Code, with `history_import`
-                      on), start the import of its sessions from before the plugin
-                      (`history`), in the background; with `repomap` on, refresh a stale map
-                      in the background
+                      with `repomap` on, refresh a stale map in the background
     UserPromptSubmit  open a prompt-turn for the loop guard; on a session's first prompt, add
                       the repository map (`repomap=on`)
     PostToolUse       fold the call into the turn's guard; a redirect when it first says the
@@ -28,7 +25,7 @@ import time
 import traceback
 
 from .. import loopguard
-from . import denylist, fold, history, hookqueue, repomap, repos, sidecall
+from . import denylist, fold, hookqueue, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -68,24 +65,17 @@ class LiveController:
         self.store.write(self._sess_name(), s)
 
     def _cmd(self, name):
-        """How a person runs one of the plugin's commands on this host."""
-        if self.host.name in ("claude", "copilot"):    # Copilot's TUI runs plugin commands too
-            return f"/tokeneconomizer:{name}"
-        if self.host.name == "pi":
-            return f"/te {name}"                 # registered by the Pi extension
-        if self.host.name == "codex":
-            return f"$tokeneconomizer:{name}"    # the plugin's Codex skills
-        return f"te --host {self.host.name} {name}"
+        """How a person runs one of the plugin's commands: omp's extension registers `/te`."""
+        return f"/te {name}"
 
     def _log(self, kind, **fields):
         self.store.append("events.jsonl", dict(
             fields, kind=kind, at=time.time(), session_id=self.sid, shadow=self.cfg.shadow))
 
     def handler(self, event):
-        # PostToolUseFailure: Copilot reports a failed tool there, not in PostToolUse.
         return {"SessionStart": self.session_start, "UserPromptSubmit": self.user_prompt,
-                "PostToolUse": self.post_tool, "PostToolUseFailure": self.post_tool,
-                "Stop": self.stop, "SessionEnd": self.session_end}.get(event)
+                "PostToolUse": self.post_tool, "Stop": self.stop,
+                "SessionEnd": self.session_end}.get(event)
 
     def handle(self):
         # A payload without a session id is not a hook call any host makes; recording it would
@@ -150,12 +140,10 @@ class LiveController:
         calls_a_model = "distiller" in self.cfg.microskills or self.cfg.loopguard != "off"
         if (pause and calls_a_model and not self.cfg.shadow
                 and seen.get("sidecall_paused") != pause["at"]):
-            byok = (" (with your own model key, Copilot does not pass it to the plugin's hooks)"
-                    if self.host.name == "copilot" else "")
             outputs.append(self.host.notice(
                 f"TokenEconomizer: the plugin's own model calls go through "
                 f"`{sidecall.call_name(self.host.name)}`, "
-                f"which answered that it is not signed in{byok}, so they are paused; facts that "
+                f"which answered that it is not signed in, so they are paused; facts that "
                 f"need no model call are still learned, and the loop guard redirects only at its "
                 f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "
                 f"again."))
@@ -164,15 +152,6 @@ class LiveController:
         note = repos.migration_notice(self.ctx.root, self._cmd("repos"))
         if note and not self.cfg.shadow:
             outputs.append(self.host.notice(note))
-
-        if not self.cfg.shadow:
-            try:
-                note = history.notice(self.ctx)
-            except Exception:           # a malformed history.json must not cost the output
-                note = None
-                self._record_error()
-            if note:
-                outputs.append(self.host.notice(note))
 
         if self.cfg.repomap != "off":
             if repomap.stale(self.ctx):
@@ -189,11 +168,6 @@ class LiveController:
         repos.note_repo(self.ctx.root, self.ctx.repo)
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
-        try:
-            history.maybe_start(self.ctx)
-        except Exception:
-            self._record_error()
-        # Not while an import of earlier sessions runs: it folds these once it is done.
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
 
@@ -221,15 +195,10 @@ class LiveController:
             return ", ".join(items[:4]) + ("..." if len(items) > 4 else "")
         if self.cfg.toolprune == "auto" and seen.get("untool_applied", "") != ",".join(mine):
             if mine:
-                trusted = (denylist.codex_project_trusted(root) if self.host.name == "codex" else
-                           denylist.copilot_folder_trusted(root) if self.host.name == "copilot"
-                           else None)
                 out.append(self.host.notice(
                     f"TokenEconomizer removed {len(mine)} {unit}(s) this repository's sessions "
                     f"never used ({few(mine)}), from this session on. Review with `{cmd}`; "
-                    f"`{cmd} restore` gives them back."
-                    + (" (The agent reads that setting only in a trusted folder: trust this "
-                       "one.)" if trusted is False else "")))
+                    f"`{cmd} restore` gives them back."))
             seen["untool_applied"] = ",".join(mine)
         # What this checkout already applied, or gave back, is no news here (another clone may
         # not have).
@@ -237,18 +206,14 @@ class LiveController:
         prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
         refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
         # Under `auto`, a list waiting for the repository to go quiet is no news yet: the
-        # session start after it is written says so (above). A refusal is, and so is what
-        # rests on sessions from before the plugin, which `auto` leaves to the person.
-        history_only = False
+        # session start after it is written says so (above). A refusal is.
         if self.cfg.toolprune == "auto" and not refused:
-            waiting = set(unt.get("needs_apply") or [])
-            prop = [t for t in prop if t in waiting]
-            history_only = bool(prop)
+            held = set(((unt.get("auto_pending") or {}).get("items") or []))
+            prop = [t for t in prop if t not in held]
         if prop and seen.get("untool") != ",".join(prop):
             out.append(self.host.notice(
                 f"TokenEconomizer: {len(prop)} {unit}(s) went unused in this repository's recent "
                 f"sessions ({few(prop)})"
-                + (", counting sessions from before the plugin" if history_only else "")
                 + f". Review with `{cmd}`; "
                 + (f"they could not be applied ({refused}), and `{cmd} apply` tries again."
                    if refused else f"nothing changes until you run `{cmd} apply`.")))
@@ -327,28 +292,18 @@ class LiveController:
 
         None before this repository has an envelope -- the guard does not act on a repository
         whose usual turns it has not learned (the rule fallback never acts without one either).
-        While this agent's model calls are paused, or it has none (`sidecall.NO_SIDE_CALLS`),
-        a judge that never answers: the turn is spared, as a missing verdict is, rather than
-        redirected on the rule alone."""
+        While this agent's model calls are paused, a judge that never answers: the turn is
+        spared, as a missing verdict is, rather than redirected on the rule alone."""
         from .judge import AsyncJudge, NoVerdict
         if envelope is None:
             return None
-        if self.host.name in sidecall.NO_SIDE_CALLS:
-            return NoVerdict()
-        # A local judge (`local_model`) needs no login, so it still answers while the host's
-        # CLI is paused (signed out). Only the settings are read here, as this runs on every
-        # tool call; the job checks that the model answers, and with none spares the turn.
-        if (sidecall.paused(self.host.name, self.ctx.root)
-                and not sidecall.local_routes("judge", self.ctx.config)):
+        if sidecall.paused(self.host.name, self.ctx.root):
             return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 
     def post_tool(self):
         if self.cfg.loopguard == "off" or self.host.is_subagent(self.p):
             return {}
-        # The answer names the event it answers: Claude Code rejects a PostToolUseFailure answer
-        # labelled PostToolUse ("Hook returned incorrect event name", 2.1.306) and drops it whole,
-        # redirect and notice -- and a stuck turn's calls are mostly failures.
         event = self.p.get("hook_event_name") or "PostToolUse"
         s = self._session()
         key = self.host.turn_key(self.p)
@@ -394,9 +349,8 @@ class LiveController:
                         self.host.notice(f"TokenEconomizer nudged this turn ({short}): the "
                                          f"same failure kept recurring."))
             elif action == "abort" and not g.abort_delivered:
-                # Still stuck after the redirect. The plugin never stops a turn itself -- the
-                # agents' hooks cannot all do it, and the person decides -- so the last rung is
-                # a notice that says how to stop it, the same on every agent and in every mode.
+                # Still stuck after the redirect. The plugin never stops a turn itself, the
+                # person decides, so the last rung is a notice that says how to stop it.
                 g.abort_delivered = True
                 s["aborts"] = int(s.get("aborts", 0)) + 1
                 self._log("abort", reason=reason, tool_calls=g.cum_turns, envelope=envelope,
@@ -416,9 +370,8 @@ class LiveController:
 
     # ---- SessionEnd ---------------------------------------------------------------------
     def session_end(self):
-        # An end with no start and no session log is no session to learn from: Codex 0.163.0
-        # sends one for a thread that never ran a prompt (`codex debug prompt-input`), and
-        # recording it would only leave an unreadable fold in the ledger.
+        # An end with no start and no session log is no session to learn from, and recording it
+        # would only leave an unreadable fold in the ledger.
         tp = self.host.transcript(self.p)
         if not os.path.exists(self.store.path(self._sess_name())) and not (
                 tp and os.path.exists(tp)):

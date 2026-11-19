@@ -79,10 +79,7 @@ def test_a_slow_ranked_map_falls_back_to_the_cached_one(env, repo, tmp_path):
     assert text.startswith("# Repository map") and "ranked toward []" in text
 
 
-def test_codex_and_start_mode_get_the_cached_map_at_session_start(env, repo, tmp_path):
-    start, outs = _session(_env(env, tmp_path), repo, "c1", ["Fix `x_y`"], host="codex")
-    assert _ctx_text(start).startswith("# Repository map")
-    assert all(_ctx_text(o) == "" for o in outs)
+def test_start_mode_gets_the_cached_map_at_session_start(env, repo, tmp_path):
     start, outs = _session(_env(env, tmp_path, mode="start"), repo, "s9", ["Fix `x_y`"])
     assert _ctx_text(start).startswith("# Repository map") and _ctx_text(outs[0]) == ""
 
@@ -100,7 +97,7 @@ def test_a_named_python_without_aider_is_reported_not_replaced(env, repo, tmp_pa
     assert _ctx_text(start) == "" and _ctx_text(outs[0]) == ""     # nothing breaks
     from tokeneconomizer.plugin.context import LiveContext
     from tokeneconomizer.plugin.hosts import HOSTS
-    st = repomap.read_state(LiveContext.build(HOSTS["claude"](), repo, e))
+    st = repomap.read_state(LiveContext.build(HOSTS["omp"](), repo, e))
     assert "cannot import aider" in st["error"] and not st.get("map")
 
 

@@ -9,7 +9,7 @@ from tokeneconomizer.microskills import GENERIC, NODE_WEB, PYTHON_GIT, observe
 from tokeneconomizer.microskills import distiller as dist
 from tokeneconomizer.microskills import envfacts as ef
 from tokeneconomizer.plugin.adapter import detect_vocabulary
-from fixtures import write_claude_transcript
+from fixtures import write_omp_session
 
 
 def _form(cmd, vocab):
@@ -32,7 +32,7 @@ def test_the_generic_reading_knows_builds_and_other_ecosystems():
 
 
 def _session(tmp_path, i, calls):
-    return write_claude_transcript(str(tmp_path / f"s{i}.jsonl"), calls)
+    return write_omp_session(str(tmp_path / f"s{i}.jsonl"), calls)
 
 
 def test_a_build_tool_repair_becomes_a_fact(tmp_path):
@@ -220,7 +220,7 @@ def test_the_generic_digest_is_language_neutral_and_relative(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     r = str(repo)
-    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
+    p = write_omp_session(str(tmp_path / "t.jsonl"), [
         ("Edit", {"file_path": f"{r}/src/main.ts", "old_string": "a", "new_string": "b"}, "ok", r),
         ("Bash", {"command": f"cd {r} && npm run build"},
          f"Exit code 2\n{r}/src/main.ts(3,5): error TS2304: Cannot find name 'foo'.", r),
@@ -325,7 +325,7 @@ def test_a_label_rewrite_the_runner_loads_becomes_a_fact_under_generic(tmp_path)
 
 def test_the_generic_digest_keeps_line_breaks_of_list_tool_results(tmp_path):
     blocks = [{"type": "text", "text": "Exit code 1\nerror: missing script: lint"}]
-    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
+    p = write_omp_session(str(tmp_path / "t.jsonl"), [
         ("Bash", {"command": "npm run lint"}, blocks),
         ("Bash", {"command": "npm test"}, [
             {"type": "text", "text": "Tests run: 3"}, {"type": "text", "text": "ok"}])])

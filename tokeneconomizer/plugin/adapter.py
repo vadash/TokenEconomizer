@@ -11,11 +11,9 @@ answers fit an interactive session instead of a sealed benchmark task:
     long they go unused, and whatever the person lists in `toolprune_protect` (names, or
     patterns such as `mcp__headroom__*`); only evidence (loaded but unused for N sessions) can propose anything
     else.
-  * `parse_catalog_with_source` reports what the session COULD call. An interactive transcript
-    does not record the tool list the way `stream-json`'s init event does, so the catalog is the
-    union of a probed snapshot (`te toolprune refresh-catalog`, stored under the state root), the
-    deferred tools the transcript lists, and the tools it used. Without a snapshot only deferred
-    tools can be proposed -- they cost one listing line each, so that is honest but small.
+  * `parse_catalog_with_source` reports what the session COULD call: the catalog the omp
+    extension reports at session start (stored under the state root), plus the tools the
+    session used. Without a reported catalog only used tools are known.
   * `env_vocabulary` is the generic one (`microskills.GENERIC`): every ecosystem at once, builds
     and checks as well as tests, every edited file, and the proposer's language-neutral digest.
     The repository's markers only pick how a script run through its shebang is spelled
@@ -36,6 +34,7 @@ from ..toolprune.tools import PROTECTED_TOOLS
 # Tools a person relies on in an interactive session, beyond the benchmark work surface.
 INTERACTIVE_PROTECTED = frozenset({
     "Bash", "Read", "Edit", "MultiEdit", "Write", "Grep", "Glob", "LS", "NotebookRead",
+    "bash", "read", "edit", "write",  # omp names its work surface lowercase
     "BashOutput", "KillShell", "KillBash",
     "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TodoWrite",
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
@@ -45,15 +44,6 @@ INTERACTIVE_PROTECTED = frozenset({
     # deny list is easy to accept without reading. Untooling is for tools a repository's work
     # genuinely never needs, and nothing says that of the web.
     "WebFetch", "WebSearch",
-})
-# The Copilot CLI's own work surface and a person's tools there (1.0.83 names). Only MCP servers
-# can be removed persistently on Copilot (`denylist.copilot_server_proposal`), so this matters
-# for what the evidence reports, not for what can be written.
-COPILOT_PROTECTED = frozenset({
-    "bash", "read_bash", "write_bash", "stop_bash", "list_bash", "view", "edit", "create",
-    "str_replace", "apply_patch", "custom", "rg", "grep", "glob", "task", "skill",
-    "read_agent", "list_agents", "write_agent", "ask_user", "web_fetch", "web_search",
-    "report_intent", "update_todo", "sql",
 })
 # Rarely used, but expensive to lose when a task needs them: proposed only after
 # HIGH_RISK_FACTOR times the usual evidence.
@@ -127,13 +117,6 @@ class LiveAdapter:
         transcript = os.path.realpath(os.path.join(run_dir_path, "transcript.jsonl"))
         cat = dict(self.catalog)
         observed = set(self.tool_usage(transcript))
-        if self.host.name == "claude":
-            observed |= trace.claude_deferred_tools(transcript)
-        elif self.host.name == "copilot":
-            # Some builds record the request's tool list in `session.usage_checkpoint`.
-            observed |= set(trace.parse_tool_names_copilot(
-                open(transcript, encoding="utf-8", errors="replace").read()
-                if os.path.exists(transcript) else ""))
         for name in observed:
             cat.setdefault(name, "")
         if not cat:
@@ -142,8 +125,7 @@ class LiveAdapter:
 
     # ---- tool pruning ----
     def protected_tools(self):
-        extra = COPILOT_PROTECTED if self.host.name == "copilot" else frozenset()
-        return _Protected(PROTECTED_TOOLS | INTERACTIVE_PROTECTED | extra, self.protect)
+        return _Protected(PROTECTED_TOOLS | INTERACTIVE_PROTECTED, self.protect)
 
     def inapplicable_tools(self):
         return ()                       # nothing is inapplicable by construction here

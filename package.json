@@ -5,7 +5,7 @@
   "scripts": {
     "test:omp": "bun test plugin/omp/"
   },
-  "description": "TokenEconomizer for Pi: micro-skills (short repository facts learned from earlier sessions) injected at session start, and a guard that redirects a turn stuck in a failing loop.",
+  "description": "TokenEconomizer for oh-my-pi (omp): micro-skills (short repository facts learned from earlier sessions) injected at session start, tool pruning, and a guard that redirects a turn stuck in a failing loop.",
   "keywords": [
     "pi-package",
     "cost",
@@ -16,7 +16,7 @@
   "repository": "https://github.com/microsoft/TokenEconomizer",
   "pi": {
     "extensions": [
-      "./plugin/pi/tokeneconomizer.ts"
+      "./plugin/omp/tokeneconomizer.ts"
     ]
   },
   "omp": {
@@ -25,6 +25,6 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@oh-my-pi/pi-coding-agent": "*"
   }
 }

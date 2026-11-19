@@ -1,15 +1,12 @@
-"""The entry point every plugin hook executes: hook JSON on stdin, hook JSON on stdout.
+"""The entry point every omp hook executes: hook JSON on stdin, hook JSON on stdout.
 
-    python -m tokeneconomizer.plugin.hook [--host antigravity|claude|codex|copilot|cursor|droid|grok|
-                                                  hermes|omp|opencode|pi] [--event NAME]
+    python -m tokeneconomizer.plugin.hook [--host omp] [--event NAME]
 
 It never fails the agent. Whatever goes wrong -- unreadable input, a full disk, a bug -- the hook
 prints `{}` (which changes nothing) and records the traceback in `<state root>/errors.log`. It
 also does nothing at all in two cases: `TE_DISABLE=1`, and `TE_SIDECALL=1`, which marks the
 nested agent process of the plugin's own paid side calls (`sidecall`) so it cannot recurse
 into these hooks.
-
-`--event` names the hook event for an agent whose payloads do not (Antigravity's).
 """
 import contextlib
 import json
@@ -35,17 +32,8 @@ def run(payload, env, host_hint=None):
                             session_id=host.session_id(payload) or None, settle=False)
     if not ctx.config.enabled:
         return {}
-    if hasattr(host, "record_event"):
-        host.record_event(payload)
-    if hasattr(host, "expand"):
-        # One call of this agent's hook stands for several events (Antigravity's `PreInvocation`
-        # is a prompt and the tool results before it): run each and merge their answers.
-        out = hosts.merge_outputs(*(LiveController(ctx, p).handle()
-                                    for p in host.expand(payload, env)))
-    else:
-        out = LiveController(ctx, payload).handle()
-    # A host whose answer has its own shape (agy's `injectSteps`), or whose events cannot all
-    # carry context (grok's SessionStart), turns the merged answer into its own terms.
+    out = LiveController(ctx, payload).handle()
+    # The omp answer has its own shape: the extension applies `omp.denyTools` at session start.
     return host.render(payload, out, ctx) if hasattr(host, "render") else out
 
 
@@ -92,10 +80,6 @@ def main(argv=None, stdin=None, stdout=None, env=None):
     except Exception:
         _record_error(env)
         out = {}
-    from .hosts import PROGRESS
-    for line in out.pop(PROGRESS, None) or ():
-        stdout.write(json.dumps({"type": "progress", "message": line}))
-        stdout.write("\n")
     stdout.write(json.dumps(out))
     stdout.write("\n")
     stdout.flush()

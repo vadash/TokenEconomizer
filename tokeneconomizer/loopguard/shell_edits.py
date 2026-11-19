@@ -30,8 +30,7 @@ _PY_OPEN_VAR = re.compile(r"open\(\s*([A-Za-z_]\w*)\s*,\s*(['\"])([^'\"]*)\2")
 _PY_WRITE_PATH_LIT = re.compile(
     r"(?:pathlib\.)?Path\(\s*(['\"])([^'\"\n]+)\1\s*\)\.write_(?:text|bytes)\(")
 _PY_WRITE_PATH_VAR = re.compile(r"\b([A-Za-z_]\w*)\.write_(?:text|bytes)\(")
-# Codex's patch format, as `apply_patch <<'PATCH'` takes it on stdin (seen live on 0.163.0, the
-# edit and the test run in one command); `trace.codex` reads the same lines from a session log.
+# A patch in the `apply_patch <<'PATCH'` format, where an edit and the test run are one command.
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.M)
 
 

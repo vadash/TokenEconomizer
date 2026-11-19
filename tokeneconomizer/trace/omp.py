@@ -1,12 +1,12 @@
-"""Pi (earendil-works/pi): a session stored as a TREE of JSONL entries.
+"""omp (oh-my-pi): a session stored as a TREE of JSONL entries.
 
 Entries link by `id` / `parentId`; the conversation is the path from the current leaf back to
 the root, and an abandoned branch stays in the file. Assistant messages carry `toolCall` blocks
 ({id, name, arguments}) and their own usage; tool results are `toolResult` messages with
-`isError`. `pi_session_to_claude` writes the ACTIVE branch as the Claude Code envelope the other
-readers already handle, so no mechanism needs a Pi branch.
+`isError`. `omp_session_events` turns the ACTIVE branch into the event envelopes the call
+readers take, so no mechanism needs a branch of its own.
 
-Usage, per pi-ai's own type: `input` excludes the cache fields, `output` already includes
+Usage, per omp's own type: `input` excludes the cache fields, `output` already includes
 reasoning, and `cacheWrite1h` is a subset of `cacheWrite` -- so the mapping to the ledger's four
 fields is direct, and `cacheWrite1h` is their 1-hour share (`cache_creation_1h_input_tokens`).
 """
@@ -16,19 +16,19 @@ import os
 from .jsonl import records
 
 
-def _pi_entries(path):
+def _entries(path):
     return list(records(path))
 
 
-def pi_session_header(path):
+def omp_session_header(path):
     """The `session` header line ({id, cwd, version, ...}), {} if absent."""
-    for ev in _pi_entries(path)[:1]:
+    for ev in _entries(path)[:1]:
         if ev.get("type") == "session":
             return ev
     return {}
 
 
-def pi_active_branch(entries):
+def omp_active_branch(entries):
     """Entries on the path from the last entry (the leaf) back to the root, in order."""
     by_id = {e.get("id"): e for e in entries if e.get("id")}
     tree = [e for e in entries if e.get("id")]
@@ -42,13 +42,13 @@ def pi_active_branch(entries):
     return list(reversed(path))
 
 
-def pi_prompt_count(path):
+def omp_prompt_count(path):
     """How many prompts the conversation ran: `user` messages on its active branch."""
-    return sum(1 for e in pi_active_branch(_pi_entries(path))
+    return sum(1 for e in omp_active_branch(_entries(path))
                if e.get("type") == "message" and (e.get("message") or {}).get("role") == "user")
 
 
-def _pi_usage(u):
+def _usage(u):
     if not isinstance(u, dict):
         return None
     return {"input_tokens": int(u.get("input") or 0),
@@ -59,7 +59,7 @@ def _pi_usage(u):
             "cost_usd": float((u.get("cost") or {}).get("total") or 0)}
 
 
-def _pi_text(content):
+def _text(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -68,55 +68,64 @@ def _pi_text(content):
     return ""
 
 
-def pi_session_to_claude(path, out_path):
-    """Write a Pi session's active branch as Claude Code transcript lines.
+def omp_session_events(path):
+    """The active branch's messages as `(assistant|user, message[, cwd])` event dicts.
 
-    Pi starts every shell command afresh in the session's directory, so each call is written
+    omp starts every shell command afresh in the session's directory, so each call is written
     with the header's `cwd`: an agent that types `cd /abs/repo && tox` into that directory ran
-    plain `tox`, and is read that way. Returns the number of tool calls written, or None when
-    the file is missing."""
-    if not path or not os.path.exists(path):
-        return None
-    n = 0
-    entries = _pi_entries(path)
+    plain `tox`, and is read that way."""
+    entries = _entries(path)
     head = entries[0] if entries and entries[0].get("type") == "session" else {}
     cwd = head.get("cwd") if isinstance(head.get("cwd"), str) else None
+    out = []
+    for e in omp_active_branch(entries):
+        if e.get("type") != "message":
+            continue
+        m = e.get("message") or {}
+        role = m.get("role")
+        if role == "user":
+            out.append({"type": "user", "message": {
+                "role": "user", "content": _text(m.get("content"))}})
+        elif role == "assistant":
+            blocks = []
+            for b in m.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "toolCall":
+                    blocks.append({"type": "tool_use", "id": b.get("id"),
+                                   "name": b.get("name"), "input": b.get("arguments") or {}})
+                elif isinstance(b, dict) and b.get("type") == "text":
+                    blocks.append({"type": "text", "text": b.get("text", "")})
+            msg = {"id": e.get("id"), "role": "assistant", "content": blocks,
+                   "model": m.get("model")}
+            usage = _usage(m.get("usage"))
+            if usage:
+                msg["usage"] = {k: v for k, v in usage.items() if k != "cost_usd"}
+            out.append(dict({"type": "assistant", "message": msg},
+                            **({"cwd": cwd} if cwd else {})))
+        elif role == "toolResult":
+            out.append({"type": "user", "message": {"role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": m.get("toolCallId"),
+                "content": _text(m.get("content")),
+                "is_error": bool(m.get("isError"))}]}})
+    return out
+
+
+def omp_write_session(path, out_path):
+    """Write `omp_session_events(path)` as JSONL. Returns the number of tool calls written, or
+    None when the file is missing."""
+    if not path or not os.path.exists(path):
+        return None
+    events = omp_session_events(path)
     with open(out_path, "w", encoding="utf-8") as out:
-        for e in pi_active_branch(entries):
-            if e.get("type") != "message":
-                continue
-            m = e.get("message") or {}
-            role = m.get("role")
-            if role == "user":
-                out.write(json.dumps({"type": "user", "message": {
-                    "role": "user", "content": _pi_text(m.get("content"))}}) + "\n")
-            elif role == "assistant":
-                blocks = []
-                for b in m.get("content") or []:
-                    if isinstance(b, dict) and b.get("type") == "toolCall":
-                        blocks.append({"type": "tool_use", "id": b.get("id"),
-                                       "name": b.get("name"), "input": b.get("arguments") or {}})
-                        n += 1
-                    elif isinstance(b, dict) and b.get("type") == "text":
-                        blocks.append({"type": "text", "text": b.get("text", "")})
-                msg = {"id": e.get("id"), "role": "assistant", "content": blocks,
-                       "model": m.get("model")}
-                usage = _pi_usage(m.get("usage"))
-                if usage:
-                    msg["usage"] = {k: v for k, v in usage.items() if k != "cost_usd"}
-                out.write(json.dumps(dict({"type": "assistant", "message": msg},
-                                          **({"cwd": cwd} if cwd else {}))) + "\n")
-            elif role == "toolResult":
-                out.write(json.dumps({"type": "user", "message": {"role": "user", "content": [{
-                    "type": "tool_result", "tool_use_id": m.get("toolCallId"),
-                    "content": _pi_text(m.get("content")),
-                    "is_error": bool(m.get("isError"))}]}}) + "\n")
-    return n
+        for ev in events:
+            out.write(json.dumps(ev) + "\n")
+    return sum(1 for ev in events if ev.get("type") == "assistant"
+               for b in (ev.get("message") or {}).get("content") or []
+               if isinstance(b, dict) and b.get("type") == "tool_use")
 
 
-def pi_json_reply(stdout):
-    """(text, usage) of a `pi --print --mode json` run: the last assistant message's text, and
-    the usage of every assistant message in ledger fields, with Pi's model id and its own cost
+def omp_json_reply(stdout):
+    """(text, usage) of an `omp --print --mode json` run: the last assistant message's text, and
+    the usage of every assistant message in ledger fields, with omp's model id and its own cost
     estimate (`cost_usd`). `usage` is None when the run produced no assistant message."""
     text, usage = "", None
     for line in (stdout or "").splitlines():
@@ -127,8 +136,8 @@ def pi_json_reply(stdout):
         m = ev.get("message") if isinstance(ev, dict) and ev.get("type") == "message_end" else None
         if not isinstance(m, dict) or m.get("role") != "assistant":
             continue
-        text = _pi_text(m.get("content")) or text
-        u = _pi_usage(m.get("usage"))
+        text = _text(m.get("content")) or text
+        u = _usage(m.get("usage"))
         if u:
             usage = usage or dict.fromkeys(u, 0)
             for k, v in u.items():
@@ -137,21 +146,21 @@ def pi_json_reply(stdout):
     return text, usage
 
 
-def pi_session_usage(path):
-    """Token breakdown of a Pi session's active branch, plus Pi's own cost estimate."""
+def omp_session_usage(path):
+    """Token breakdown of an omp session's active branch, plus omp's own cost estimate."""
     totals = {"input_tokens": 0, "cache_read_input_tokens": 0,
               "cache_creation_input_tokens": 0, "output_tokens": 0,
               "cache_creation_1h_input_tokens": 0}
     cost, requests, models = 0.0, 0, {}
-    for e in pi_active_branch(_pi_entries(path)):
+    for e in omp_active_branch(_entries(path)):
         u = None
         if e.get("type") == "message" and (e.get("message") or {}).get("role") == "assistant":
             m = e["message"]
-            u = _pi_usage(m.get("usage"))
+            u = _usage(m.get("usage"))
             if m.get("model"):
                 models[m["model"]] = models.get(m["model"], 0) + 1
         elif e.get("type") in ("usage", "compaction", "branch_summary"):
-            u = _pi_usage(e.get("usage"))
+            u = _usage(e.get("usage"))
         if u:
             requests += 1
             cost += u.pop("cost_usd")

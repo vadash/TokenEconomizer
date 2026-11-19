@@ -167,10 +167,9 @@ class ToolingStage(Stage):
             srow["untool_evidence_reaudit"] = bool(self._ev_reaudit)
             if not self._exclude_tools and self.adapter is not None:
                 # Source-aware where the adapter supports it: an empty catalog is
-                # indistinguishable from "this agent loaded no tools", which would leave
-                # pruning a no-op unnoticed (trace.catalog_sources). Record which source won
-                # so a change of log format shows up in the rows, and say so out loud the
-                # first time nothing parses.
+                # indistinguishable from "this session loaded no tools", which would leave
+                # pruning a no-op unnoticed. Record which source won so a change of catalog
+                # reporting shows up in the rows, and say so the first time nothing parses.
                 getter = getattr(self.adapter, "parse_catalog_with_source", None)
                 if getter is not None:
                     cat, src = getter(run_dir_path, self.agent)
@@ -184,8 +183,8 @@ class ToolingStage(Stage):
                     self._warned_no_catalog = True
                     print(f"[tooling] !! no tool catalog parsed for agent={self.agent} "
                           f"from {run_dir_path} -- evidence pruning can drop NOTHING and "
-                          f"this arm will behave as its baseline. Likely an agent-CLI "
-                          f"upgrade that moved the catalog; see trace.catalog_sources.",
+                          f"this arm will behave as its baseline. Likely a session format "
+                          f"change that moved the catalog.",
                           flush=True)
             for t in self.catalog_tools:
                 if t in task_used:

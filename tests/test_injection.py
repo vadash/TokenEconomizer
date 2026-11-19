@@ -3,7 +3,7 @@ import os
 
 from tokeneconomizer.microskills import Distiller, PrefixStage
 from tokeneconomizer.config import InjectionConfig
-from fixtures import write_claude_transcript
+from fixtures import write_omp_session
 
 
 def _facts_runner(payload):
@@ -14,7 +14,7 @@ def _facts_runner(payload):
 def test_distiller_empty_render_before_formation(tmp_path):
     d = Distiller("acme/widget", runner=_facts_runner('{"extractors":[],"facts":[]}'))
     tr = str(tmp_path / "t.jsonl")
-    write_claude_transcript(tr, [("bash", {"command": "pytest"}, "ok")])
+    write_omp_session(tr, [("bash", {"command": "pytest"}, "ok")])
     d.update(tr, iid="widget-1", resolved=True)
     assert d.render() == ""          # nothing has fired/formed yet
     assert d.now == 1
@@ -24,7 +24,7 @@ def test_distiller_persist_roundtrip(tmp_path):
     root = str(tmp_path)
     d = Distiller("acme/widget", runner=_facts_runner('{"extractors":[],"facts":[]}'))
     tr = str(tmp_path / "t.jsonl")
-    write_claude_transcript(tr, [("bash", {"command": "pytest"}, "ok")])
+    write_omp_session(tr, [("bash", {"command": "pytest"}, "ok")])
     d.update(tr, iid="w-1", resolved=True)
     d.save(root)
     d2 = Distiller.load("acme/widget", root)
@@ -45,7 +45,7 @@ def test_distiller_grounds_and_fires_a_fact(tmp_path):
     inj.PROPOSE_EVERY = 1
     for i in range(8):
         tr = str(tmp_path / f"t{i}.jsonl")
-        write_claude_transcript(tr, [
+        write_omp_session(tr, [
             ("edit", {"file_path": f"pkg/mod{i}.py"}, "ok"),
             ("bash", {"command": "python -m pytest tests/test_x.py"}, "1 passed")])
         d.update(tr, iid=f"w-{i}", resolved=True)
@@ -60,9 +60,9 @@ def test_prefix_stage_after_task_reports_tokens(tmp_path):
     cfg = InjectionConfig(enabled=True, propose_every=5)
     stage = PrefixStage(cfg, "acme/widget", root, fresh=True,
                         runner=_facts_runner('{"extractors":[],"facts":[]}'),
-                        agent="claude")
+                        agent="omp")
     rd = str(tmp_path / "run"); os.makedirs(rd)
-    write_claude_transcript(os.path.join(rd, "transcript.jsonl"),
+    write_omp_session(os.path.join(rd, "transcript.jsonl"),
                             [("bash", {"command": "pytest"}, "ok")])
     srow = {"resolved": True}
     opt, reason = stage.after_task({"instance_id": "w-1"}, {}, rd, srow)
@@ -84,7 +84,7 @@ def test_microskills_progress_counts_only_sessions_folded_while_it_was_on(
            "GIT_CEILING_DIRECTORIES": str(tmp_path)}
     for var in ("TE_MICROSKILLS", "TE_INJECT"):
         monkeypatch.delenv(var, raising=False)
-    ctx = LiveContext.build(hosts.Codex(), str(repo), env, settle=False)
+    ctx = LiveContext.build(hosts.Omp(), str(repo), env, settle=False)
     ctx.store.ensure()
     repo_dir = os.path.dirname(ctx.store.base)
     with open(os.path.join(repo_dir, "config.json"), "w", encoding="utf-8") as fh:
@@ -93,7 +93,7 @@ def test_microskills_progress_counts_only_sessions_folded_while_it_was_on(
     ctx.store.write("injection.json", {"sessions": 5, "imported_sessions": 2, "rendered": ""})
     monkeypatch.setattr(cli, "_ctx", lambda args: ctx)
 
-    assert cli.main(["--host", "codex", "--cwd", str(repo), "microskills"]) == 0
+    assert cli.main(["--host", "omp", "--cwd", str(repo), "microskills"]) == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0] == (
         "micro-skills is on here (repo config: envfacts+distiller; default off)")

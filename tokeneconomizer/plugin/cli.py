@@ -9,11 +9,11 @@
                                       under that id or from the same evidence
     te microskills unforget ID ...    bring forgotten facts back, as they were
     te toolprune show                 the proposed deny list, and the evidence behind it
-    te toolprune apply [ITEM ...]     write the proposal (or the named items) to the repository's
-                                      settings: tools (Claude Code), capabilities (Codex) or
-                                      MCP servers (Copilot)
+    te toolprune apply [ITEM ...]     write the proposal (or the named items): the omp session's
+                                      tool list
     te toolprune restore [ITEM ...]   remove entries this plugin added
-    te toolprune refresh-catalog      record the tool list a fresh session loads (Claude, Copilot)
+    te toolprune refresh-catalog      record the tool list a fresh session loads (omp reports it
+                                      at each SessionStart)
     te toolprune measure              measure the request with and without the proposal
     te toolprune apply-pending        write a pending `auto` deny list once the repository has
                                       been idle long enough (the fold starts it, detached)
@@ -24,12 +24,8 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
-    te history import [--dry-run]     fold this repository's sessions from before the plugin,
-                                      from the agent's own logs (no model calls,
-                                      no deny list written; only before any session is folded;
-                                      with `history_import=on`, the first session start runs
-                                      it by itself)
-    te history [import --status]      what that import did here
+    te history [import --status]      what an import of earlier sessions did here (omp keeps no
+                                      session log the plugin reads, so an import is refused)
     te repos                          every repository with state here: how it was identified,
                                       its agents and sessions, the checkouts seen
     te repos migrate                  send state recorded under earlier keys where it belongs
@@ -37,15 +33,13 @@
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
     te doctor                         check the installation
-    te --host copilot probe           real Copilot sessions in a throwaway repository: does a
-                                      learned fact change what the model does, and what does the
-                                      deny list save (makes model calls; see plugin/probe.py)
+    te --host omp probe               not available: the session probe needs another agent's
+                                      session logs
 
 `te facts` and `te untool` are the earlier names of `microskills` and `toolprune`, and still work.
 With no subcommand, `te` prints the same list as `te help`.
-`--cwd` picks the repository (default: the current directory) and `--host` the agent
-(claude | codex | copilot | pi; default: `TE_HOST`, else the agent whose shell runs `te`, else
-claude).
+`--cwd` picks the repository (default: the current directory) and `--host` the agent (omp,
+the only one).
 """
 import argparse
 import glob
@@ -58,8 +52,7 @@ import textwrap
 import time
 
 from .. import loopguard
-from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall,
-               toolcheck)
+from . import (accounting, denylist, fold, history, hosts, paths, repomap, repos, sidecall)
 from .config import LiveConfig, canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
@@ -72,9 +65,8 @@ def _ctx(args, env=None, session_id=None):
 
 def _unwritable(path):
     """Why the plugin cannot write its state at `path`, or None when it can. A command that
-    changes something checks first: a sandboxed agent (Codex's default sandbox makes everything
-    outside the workspace read-only) must not get half a change -- a deny list written to the
-    repository's settings, and no record that the plugin added it, which `restore` needs."""
+    changes something checks first: a sandboxed agent must not get half a change -- a deny list
+    recorded, and no state root to record it in, which `restore` needs."""
     probe = os.path.join(path, f".write-test-{os.getpid()}")
     try:
         os.makedirs(path, exist_ok=True)
@@ -92,7 +84,7 @@ def _refuse_unwritable(path):
         return 0
     print(f"not changed: TokenEconomizer cannot write its state in {path} ({why}). Inside a "
           f"sandboxed agent, run this command with permission to write outside the workspace "
-          f"(Codex asks you to approve it), or run it from a terminal as "
+          f"(the agent may ask you to approve it), or run it from a terminal as "
           f"`~/.tokeneconomizer/bin/te {' '.join(sys.argv[1:]) or '...'}`.")
     return 1
 
@@ -460,31 +452,8 @@ def _toolprune_show(ctx, unt):
                 "apply-pending: writes a pending auto list once this repository's sessions have "
                 "been idle"):
         print(_wrap(tip))
-    if host == "codex":
-        caps = unt.get("capabilities") or {}
-        if caps:
-            print("capabilities (removable from a project's .codex/config.toml):")
-            for c, e in sorted(caps.items()):
-                print(f"  {c:14s} loaded in {e['loaded_sessions']:3d} sessions "
-                      f"({e.get('loaded_prompts', e['loaded_sessions']):3d} prompts), unused in "
-                      f"{e['unused_sessions']:3d}{'  USED (kept)' if e['used'] else ''}")
-        trusted = denylist.codex_project_trusted(ctx.repo.root)
-        if trusted is False:
-            print(_wrap("note: Codex reads a project's .codex/config.toml only in a TRUSTED "
-                        "project; trust this one in Codex first, or an applied proposal does "
-                        "nothing."))
-        return 0
-    if host == "copilot":
-        servers = unt.get("servers") or {}
-        if servers:
-            print("MCP servers (Copilot can only remove a whole server):")
-            for name, e in sorted(servers.items()):
-                state = ("USED (kept)" if e["used"] else
-                         f"unused for {e.get('unused_sessions', 0)} sessions "
-                         f"({e.get('unused_prompts', 0)} prompts)")
-                print(f"  {name:24s} {e['tools']:3d} tools, {state}")
     streaks = unt.get("streaks") or {}
-    if streaks and host == "claude":
+    if streaks:
         cfg = ctx.config
         prompts = unt.get("prompt_streaks") or {}
         print(f"how long each tool has gone unused (a tool never used is left out after "
@@ -496,13 +465,12 @@ def _toolprune_show(ctx, unt):
     if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
         if os.path.exists(os.path.join(ctx.root, "hosts", host, "catalog.json")):
             # Recorded, but a repository reads the catalog when its next session is folded.
-            print(_wrap("note: the catalog `toolprune refresh-catalog` recorded joins this "
-                        "repository's evidence from its next session."))
+            print(_wrap("note: the catalog omp reported joins this repository's evidence from "
+                        "its next session."))
         else:
-            print(_wrap(f"note: without `te --host {host} toolprune refresh-catalog` only "
-                        + ("deferred and observed" if host == "claude" else "observed")
-                        + " tools are known, which leaves the always-loaded tools out of the "
-                          "evidence."))
+            print(_wrap("note: omp reports its tool catalog at each SessionStart; until one is "
+                        "recorded only observed tools are known, which leaves the always-loaded "
+                        "tools out of the evidence."))
     return 0
 
 
@@ -561,12 +529,6 @@ def cmd_toolprune(args):
         if not tools:
             print("nothing to apply")
             return 0
-        if host == "codex":
-            bad = [t for t in tools if t not in denylist.CODEX_TOGGLES]
-            if bad:
-                print(f"not a removable Codex capability: {', '.join(bad)} (choose from "
-                      f"{', '.join(denylist.CODEX_LIVE_CAPABILITIES)})")
-                return 2
         try:
             added = denylist.apply(ctx.repo.root, tools, ctx.store, host=host)
         except RuntimeError as e:
@@ -574,35 +536,9 @@ def cmd_toolprune(args):
             return 1
         # Named by the person: no longer one they gave back, whatever `restore` said before.
         denylist.set_kept(ctx.store, ctx.repo.root, host, remove=tools)
-        if host == "omp":
-            print(f"added: {', '.join(added) or '(already present)'}\n"
-                  "the omp session tool list (applied by the extension at session start) -- "
-                  "takes effect from the next omp session.")
-        else:
-            print(f"added: {', '.join(added) or '(already present)'}\n"
-                  f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the "
-                  f"next session.")
-        if host == "copilot" and added:
-            if denylist.copilot_folder_trusted(ctx.repo.root) is False:
-                print("warning: Copilot reads a repository's .github/copilot settings only in a "
-                      "trusted folder, and this one is not. Trust it (Copilot asks when you "
-                      "start it here), or the change does nothing.")
-            left = toolcheck.verify_copilot(ctx.repo.root,
-                                            denylist.applied_for(ctx.store, ctx.repo.root, host))
-            if left is not None:
-                print("checked with a local capture: " + ", ".join(
-                    f"{k} {'removed' if not v else f'still loaded ({v} tools)'}"
-                    for k, v in sorted(left.items())))
-        if host == "codex" and added:
-            if denylist.codex_project_trusted(ctx.repo.root) is False:
-                print("warning: this project is not trusted in Codex, which ignores a "
-                      "project's .codex/config.toml until it is. Trust it (Codex asks when "
-                      "you start it here), or the change does nothing.")
-            state = toolcheck.verify_codex(ctx.repo.root,
-                                           denylist.applied_for(ctx.store, ctx.repo.root, host))
-            if state:
-                print("codex features list: " + ", ".join(
-                    f"{k}={'on' if v else 'off'}" for k, v in sorted(state.items())))
+        print(f"added: {', '.join(added) or '(already present)'}\n"
+              "the omp session tool list (applied by the extension at session start) -- "
+              "takes effect from the next omp session.")
         return 0
     if action == "restore":
         try:
@@ -620,33 +556,11 @@ def cmd_toolprune(args):
     if action == "apply-pending":
         return _wait_and_apply(args)
     if action == "refresh-catalog":
-        if host == "codex":
-            print("Codex needs no catalog: its removable capabilities are a fixed set "
-                  f"({', '.join(denylist.CODEX_LIVE_CAPABILITIES)}), read from each session.")
-            return 0
-        if host == "omp":
-            print("omp reports its tool catalog at each SessionStart; the plugin records it "
-                  "then.")
-            return 0
-        path, tools = toolcheck.refresh_catalog(state_root(), host=host)
-        print(f"{len(tools)} tools recorded in {path}:\n  " + ", ".join(tools))
+        print("omp reports its tool catalog at each SessionStart; the plugin records it then.")
         return 0
     if action == "measure":
-        if host == "omp":
-            print("not measured: omp pruning is applied by its extension")
-            return 1
-        tools = args.tools or _proposal(ctx, unt) or denylist.applied_for(
-            ctx.store, ctx.repo.root, host)
-        if not tools:
-            print("no proposal to measure")
-            return 1
-        try:
-            res = toolcheck.measure(tools, host=host)
-        except RuntimeError as e:
-            print(f"not measured: {e}")
-            return 1
-        print(json.dumps(res, indent=2))
-        return 0
+        print("not measured: omp pruning is applied by its extension")
+        return 1
     return 2
 
 
@@ -671,19 +585,6 @@ def cmd_repomap(args):
         print(f"last refresh failed: {st['error']}")
     print(repomap.HEADER + st["map"][:2000] + ("\n..." if len(st["map"]) > 2000 else ""))
     return 0
-
-
-def _rtk_hook():
-    """Where rtk's PreToolUse hook is registered for Claude Code or Copilot, if anywhere."""
-    found = []
-    for path in (os.path.expanduser("~/.claude/settings.json"),
-                 *glob.glob(os.path.expanduser("~/.copilot/hooks/*.json"))):
-        try:
-            if "rtk" in open(path, encoding="utf-8").read():
-                found.append(path)
-        except OSError:
-            pass
-    return found
 
 
 # ---- config / doctor / fold ----------------------------------------------------------------
@@ -712,13 +613,6 @@ def _config_view(cfg):
             "loopguard_nudges": d.pop("loopguard_nudges"),
             "thresholds": loopguard.base_thresholds(cfg.loopguard_aggr, pinned),
             "pinned": sorted(pinned)},
-        "history": {"state": "on" if cfg.history_import else "off",
-                    "history_import": d.pop("history_import"),
-                    "history_max_sessions": d.pop("history_max_sessions"),
-                    "history_days": d.pop("history_days"),
-                    "history_dirs": d.pop("history_dirs")},
-        "droid": {"state": "on" if cfg.droid_sidecall else "off",
-                  "droid_sidecall": d.pop("droid_sidecall")},
         "other": d,
         "warnings": cfg.warnings,
     }
@@ -787,7 +681,7 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
-    if {canonical(k) for k in updates} & {"microskills", "loopguard", "droid_sidecall"} and sidecall.resume(
+    if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
             ctx.host.name, ctx.root):
         print(f"the plugin's model calls through `{sidecall.call_name(ctx.host.name)}` will be "
               f"tried again")
@@ -815,8 +709,7 @@ def cmd_fold(args):
 
 def _print_history(ctx, doc):
     if not doc:
-        print(f"no import of earlier sessions recorded for {ctx.repo.label}"
-              + ("" if ctx.config.history_import else " (history_import is off)"))
+        print(f"no import of earlier sessions recorded for {ctx.repo.label}")
         return
     print(f"{ctx.repo.label}: {history.describe(doc, ctx.host.name) or doc.get('state')}")
     skipped = doc.get("skipped") if isinstance(doc.get("skipped"), dict) else {}
@@ -827,7 +720,7 @@ def _print_history(ctx, doc):
 
 
 def cmd_history(args):
-    """`te history [import]`: a repository's sessions from before the plugin."""
+    """`te history [import]`: what an import of earlier sessions did here."""
     ctx = _ctx(args)
     if args.action == "status" or args.status:
         _print_history(ctx, history.summary(ctx))
@@ -835,34 +728,11 @@ def cmd_history(args):
     if not ctx.host.keeps_history:
         print(f"{ctx.host.name}: no session history the plugin reads")
         return 1
-    if args.dry_run:
-        p = history.plan(ctx)
-        print(f"{len(p['sessions'])} earlier session(s) of {ctx.repo.label} would be read"
-              + (f", oldest {_when(p['sessions'][0]['started'])}, newest "
-                 f"{_when(p['sessions'][-1]['started'])}" if p["sessions"] else ""))
-        skipped = dict(p["skipped"], **({"older_than_the_newest": p["over_limit"]}
-                                        if p["over_limit"] else {}))
-        if skipped:
-            print("left out: " + ", ".join(f"{k} {v}" for k, v in sorted(skipped.items())))
-        why = history._refusal(ctx, False)
-        if why:
-            print(f"not importable now: {why}")
-        return 0
-    if _refuse_unwritable(ctx.store.base):
-        return 1
     res = history.run(ctx, auto=args.auto, log=lambda line: print(line, flush=True))
     if args.auto:
         return 0
-    if res["state"] in ("refused", "skipped", "busy", "error"):
-        # "error" is a fatal error inside the import: `run` recorded the reason
-        # and left no `imported` count, so it is reported like the other
-        # failure states rather than read as one.
-        print(f"not imported: {res['reason']}")
-        return 1
-    print(f"imported {res['imported']} earlier session(s) of {ctx.repo.label}"
-          + (f"; stopped at its time budget with {res['left']} to go (`te history import` "
-             f"resumes)" if res["state"] == "partial" else ""))
-    return 0
+    print(f"not imported: {res['reason']}")
+    return 1
 
 
 def cmd_judge(args):
@@ -965,11 +835,8 @@ def cmd_repos(args):
 
 
 def cmd_probe(args):
-    if args.host != "copilot":
-        print("the probe runs on Copilot only so far: `te --host copilot probe`")
-        return 2
-    from . import probe
-    return probe.run(sessions=args.sessions, model=args.model, keep=args.keep)
+    print("the session probe is not available for omp: it needs another agent's session logs")
+    return 2
 
 
 def cmd_doctor(args):
@@ -986,72 +853,17 @@ def cmd_doctor(args):
         print(f"state root  {root} NOT writable: {e}")
         ok = False
     import shutil as _sh
-    # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("antigravity", "claude", "codex", "copilot", "droid", "grok", "hermes",
-                          "opencode", "pi")
-              if _sh.which(sidecall.claude_cli() if h == "claude" else
-                           sidecall.hermes_cli() if h == "hermes" else
-                           "agy" if h == "antigravity" else h)]
-    print("agents      " + (', '.join(agents) or 'none of antigravity (agy), claude, codex, '
-                             'copilot, droid, grok, hermes, opencode, pi on PATH'))
-    ctx = _ctx(args)          # the per-agent lines below read the settings in effect
-    for h in agents:
-        pause = sidecall.paused(h, root)
-        if pause:
-            print(f"{h:11s} model calls paused since "
-                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: "
-                  f"`{sidecall.call_name(h)}` said it is not signed in; "
-                  f"`config set microskills=on` (or `loopguard=on`) tries again")
-    if "claude" in agents:
-        cat = os.path.join(root, "hosts", "claude", "catalog.json")
-        print(f"claude      catalog {'present' if os.path.exists(cat) else 'not probed'}")
-    if "codex" in agents:
-        trusted = denylist.codex_project_trusted(ctx.repo.root)
-        if trusted is not None:
-            print(f"codex       this project is {'trusted' if trusted else 'NOT trusted'} "
-                  f"(an untrusted project's .codex/config.toml is ignored)")
-    if "copilot" in agents:
-        from urllib.parse import urlparse
-        from .sidecall import copilot_model
-        cat = os.path.join(root, "hosts", "copilot", "catalog.json")
-        print(f"copilot     catalog {'present' if os.path.exists(cat) else 'not probed'}")
-        base = os.environ.get("COPILOT_PROVIDER_BASE_URL")
-        route = (f"BYOK {os.environ.get('COPILOT_PROVIDER_TYPE') or 'openai'} at "
-                 f"{urlparse(base).netloc or base}" if base else "Copilot subscription")
-        print(f"copilot     {route}; side calls and `probe` use model "
-              f"{copilot_model() or '(Copilot default)'}")
-        if base:
-            print("copilot     note: Copilot does not pass COPILOT_PROVIDER_* to the plugin's "
-                  "hooks, so its model calls (micro-skills' proposer, the loop guard's judge) "
-                  "cannot use this provider")
-        ctrust = denylist.copilot_folder_trusted(args.cwd)
-        if ctrust is not None:
-            print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "
-                  f"untrusted folder's .github/copilot settings are ignored)")
-    if "droid" in agents:
-        sessions = os.environ.get("DROID_SESSIONS_DIR") or os.path.join(
-            os.path.expanduser("~"), ".factory", "sessions")
-        if getattr(ctx.config, "droid_sidecall", False):
-            side = "on (the `droid_sidecall` setting)"
-        elif sidecall.droid_enabled():
-            side = "on (TE_DROID_SIDECALL=1)"
-        else:
-            side = ("off (set `droid_sidecall=on` or TE_DROID_SIDECALL=1 to try them)")
-        print(f"droid       sessions {sessions}; side calls {side}; tool pruning is not "
-              f"available in the TUI")
-    if "hermes" in agents:
-        link = os.path.join(sidecall.hermes_home(), "plugins", "tokeneconomizer")
-        print(f"hermes      plugin {'linked at ' + link if os.path.exists(link) else 'not in ' + link}"
-              f" (it also needs `hermes plugins enable tokeneconomizer`)")
-    if "pi" in agents:
-        settings = os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or os.path.join(
-            os.path.expanduser("~"), ".pi", "agent"), "settings.json")
-        try:
-            pkgs = json.load(open(settings, encoding="utf-8")).get("packages") or []
-        except (OSError, ValueError, AttributeError):
-            pkgs = []
-        mine = [p for p in pkgs if "tokeneconomizer" in json.dumps(p).lower()]
-        print(f"pi          package {'installed: ' + str(mine[0]) if mine else 'not in ' + settings}")
+    on_path = _sh.which("omp")
+    print(f"omp         {'on PATH: ' + on_path if on_path else 'not on PATH'}")
+    ctx = _ctx(args)          # the lines below read the settings in effect
+    pause = sidecall.paused("omp", root)
+    if pause:
+        print(f"omp         model calls paused since "
+              f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: "
+              f"`{sidecall.call_name('omp')}` said it is not signed in; "
+              f"`config set microskills=on` (or `loopguard=on`) tries again")
+    cat = os.path.join(root, "hosts", "omp", "catalog.json")
+    print(f"omp         catalog {'present' if os.path.exists(cat) else 'not reported yet'}")
     print(f"repository  {ctx.repo.root}: {repos.describe(ctx.repo)}; state {ctx.repo.key}")
     home_git = os.path.join(paths.home_dir(), ".git")
     for path in repos.ignored_git_entries(args.cwd):
@@ -1067,11 +879,10 @@ def cmd_doctor(args):
     py = repomap.find_python(ctx)
     print(f"repomap     {ctx.config.repomap}; " + (f"aider found ({py})" if py else
           "no Python with aider found (pip install aider-chat, or set repomap_python)"))
-    rtk, hooks = _sh.which("rtk"), _rtk_hook()
-    if rtk or hooks:
-        print(f"rtk         {rtk or 'not on PATH'}; hook in "
-              f"{', '.join(hooks) or 'no settings file'}. Compatible. Note: `rtk pytest` prints "
-              f"nothing when pytest is missing, so the plugin cannot learn that fact from it")
+    rtk = _sh.which("rtk")
+    if rtk:
+        print(f"rtk         {rtk}. Compatible. Note: `rtk pytest` prints nothing when pytest is "
+              f"missing, so the plugin cannot learn that fact from it")
     log = os.path.join(root, "errors.log")
     if os.path.exists(log):
         tail = open(log, encoding="utf-8", errors="replace").read().splitlines()[-6:]

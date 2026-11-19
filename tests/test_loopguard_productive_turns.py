@@ -34,19 +34,23 @@ def test_an_exit_status_covers_a_command_unless_its_work_could_fail_unseen(cmd, 
     assert exit_status_covers(cmd) is covers
 
 
-def _claude_success(cmd, stdout, **response):
-    return {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": cmd},
-            "tool_response": dict({"stdout": stdout, "stderr": "", "interrupted": False},
-                                  **response)}
+def _omp_result(cmd, stdout, exit_code=0, **response):
+    return {"hook_event_name": "PostToolUse", "tool_name": "bash",
+            "tool_input": {"command": cmd},
+            "tool_response": dict({"content": stdout, "isError": False,
+                                   "exit_code": exit_code}, **response)}
 
 
-def test_a_claude_code_shell_success_exited_zero_where_that_status_covers_it():
-    h = hosts.ClaudeCode()
-    assert h.tool_call(_claude_success("npx playwright test spec.ts", LIBUV))[3] == 0
-    assert h.tool_call(_claude_success("python repro.py 2>&1 | tail", "Traceback"))[3] is None
-    assert h.tool_call(_claude_success("npm test", "", interrupted=True))[3] is None
-    assert h.tool_call({"hook_event_name": "PostToolUse", "tool_name": "Read",
-                        "tool_input": {"file_path": "/r/a.ts"}, "tool_response": "x"})[3] is None
+def test_an_omp_shell_result_carries_the_reported_exit_code():
+    h = hosts.Omp()
+    assert h.tool_call(_omp_result("npx playwright test spec.ts", LIBUV))[3] == 0
+    # a pipe's status is its last command's; the guard reads the failure from the output
+    assert h.tool_call(_omp_result("python repro.py 2>&1 | tail", "Traceback"))[3] == 0
+    assert h.tool_call(_omp_result("npm test", "", isError=True,
+                                   exit_code=None))[3] is None
+    assert h.tool_call({"hook_event_name": "PostToolUse", "tool_name": "read",
+                        "tool_input": {"file_path": "/r/a.ts"},
+                        "tool_response": "x"})[3] is None
 
 
 def test_green_playwright_runs_are_not_failures_whatever_libuv_prints():
@@ -61,17 +65,17 @@ def test_green_playwright_runs_are_not_failures_whatever_libuv_prints():
     assert g.resolved_proxy() and g.whole.test_runs == 4
     assert runner_verdict("  1 failed\n    [chromium] a.spec.ts:3:1\n  6 passed (20.1s)") is True
 
-
 def test_source_read_through_the_shell_is_not_an_error_output_and_a_piped_crash_still_is():
     g = TurnGuard()
     src = '      if (!service) throw new BookingRequestError("unavailable", "Service not found");'
     for cmd in ("cat apps/web/booking.ts", "sed -n '1,80p' apps/web/booking.ts",
                 "grep -rn BookingRequestError apps | head -20"):
-        g.fold("Bash", {"command": cmd}, src, hosts.claude_success_code("Bash", {"command": cmd}))
+        g.fold("bash", {"command": cmd}, src,
+               0 if exit_status_covers(cmd) else None)
     assert g.whole.error_outputs == 0
     cmd = "python repro.py 2>&1 | tail -3"
-    g.fold("Bash", {"command": cmd}, "Traceback (most recent call last):\nValueError: x",
-           hosts.claude_success_code("Bash", {"command": cmd}))
+    g.fold("bash", {"command": cmd}, "Traceback (most recent call last):\nValueError: x",
+           0 if exit_status_covers(cmd) else None)
     assert g.whole.error_outputs == 1
 
 
@@ -96,29 +100,27 @@ def test_a_vitest_run_behind_dotenv_is_a_verification_and_a_test_run():
     assert g.verifications == 2 and g.st.test_runs == 2
 
 
-def test_successful_claude_edits_of_files_containing_assert_or_failed_are_not_errors():
-    h = hosts.ClaudeCode()
-    edit = {"hook_event_name": "PostToolUse", "tool_name": "Edit",
+def test_successful_omp_edits_of_files_containing_assert_or_failed_are_not_errors():
+    h = hosts.Omp()
+    edit = {"hook_event_name": "PostToolUse", "tool_name": "edit",
             "tool_input": {"file_path": "/r/README.md"},
-            "tool_response": {"filePath": "/r/README.md", "oldString": "old",
-                              "newString": "the failed case asserts the value",
-                              "originalFile": "old\n",
-                              "structuredPatch": [{"lines": ["+the failed case asserts the value"]}],
-                              "replaceAll": False, "userModified": False}}
-    write = {"hook_event_name": "PostToolUse", "tool_name": "Write",
+            "tool_response": {"isError": False, "content": "the failed case asserts the value",
+                              "structuredPatch": [{"lines": ["+the failed case asserts the value"]}]}}
+    write = {"hook_event_name": "PostToolUse", "tool_name": "write",
              "tool_input": {"file_path": "/r/test_a.py"},
-             "tool_response": {"type": "create", "filePath": "/r/test_a.py",
+             "tool_response": {"isError": False,
                                "content": "def test_x():\n    assert False, 'failed'\n",
-                               "originalFile": None, "structuredPatch": []}}
+                               "structuredPatch": []}}
     g = TurnGuard()
     for p in (edit, write, edit):
         name, args, text, code = h.tool_call(p)
         assert text == ""
         g.fold(name, args, text, code)
     assert g.whole.error_outputs == 0 and g.whole.repeated_fail_sigs == 0
-    failure = {"hook_event_name": "PostToolUseFailure", "tool_name": "Edit",
+    failure = {"hook_event_name": "PostToolUse", "tool_name": "edit",
                "tool_input": {"file_path": "/r/README.md"},
-               "error": "Error: String to replace not found in file."}
+               "tool_response": {"isError": True,
+                                 "error": "Error: String to replace not found in file."}}
     name, args, text, code = h.tool_call(failure)
     g.fold(name, args, text, code)
     assert g.whole.error_outputs == 1
