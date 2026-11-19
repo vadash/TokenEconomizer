@@ -17,6 +17,7 @@ for, and must not drop out of the account.
 import time
 
 from . import sidecall
+from .context import detached
 
 REQUEST = "judge/{sid}.request.json"
 RESULT = "judge/{sid}.result.json"
@@ -101,7 +102,6 @@ def run_job(ctx, session_id, job_id):
 
 
 def spawn_job(ctx, session_id, job_id):
-    """Run a judge job detached (inline when TE_JUDGE_SYNC=1, for tests)."""
-    if ctx.env.get("TE_JUDGE_SYNC") == "1":
-        return run_job(ctx, session_id, job_id)
-    return ctx.spawn(["judge", "--session", session_id, "--job", job_id], "judge.log")
+    """Run a judge job detached (inline when TE_SYNC=1 or TE_JUDGE_SYNC=1, for tests)."""
+    return detached(ctx, "judge", ["judge", "--session", session_id, "--job", job_id],
+                    lambda: run_job(ctx, session_id, job_id), sync=("TE_JUDGE_SYNC",))

@@ -31,6 +31,8 @@ import subprocess
 import sys
 import time
 
+from .context import detached
+
 
 # The generator ships with the core; the experiments' repo-map baseline runs the same one.
 GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "repomap_gen.py")
@@ -179,12 +181,10 @@ def stale(ctx):
     return (not s.get("map") or s.get("commit") != head_commit(ctx.repo.root)
             or s.get("tokens_budget") != ctx.config.repomap_tokens)
 
-
 def spawn_refresh(ctx):
-    """Refresh in a detached process (inline when TE_FOLD_SYNC=1, for tests)."""
-    if ctx.env.get("TE_FOLD_SYNC") == "1":
-        return refresh(ctx)
-    return ctx.spawn(["repomap", "refresh"], "repomap.log")
+    """Refresh in a detached process (inline when TE_SYNC=1 or TE_FOLD_SYNC=1, for tests)."""
+    return detached(ctx, "repomap", ["repomap", "refresh"], lambda: refresh(ctx),
+                    sync=("TE_FOLD_SYNC",))
 
 
 def cached_block(ctx):

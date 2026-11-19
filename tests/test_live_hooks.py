@@ -18,11 +18,14 @@ import time
 import pytest
 
 from tokeneconomizer.plugin import denylist, fold, hook, hosts
+from tokeneconomizer.plugin import judge as live_judge
 from tokeneconomizer.plugin import turnsession
 from tokeneconomizer.plugin.context import LiveContext
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
 
+# conftest swaps `spawn_job` for `run_job` in every test; the sync tests restore the real one.
+_real_spawn_job = live_judge.spawn_job
 
 
 @pytest.fixture
@@ -828,6 +831,60 @@ def test_the_fold_leaves_one_detached_waiter_and_a_second_one_leaves(
     monkeypatch.setenv("TE_TOOLPRUNE_QUIET_MINUTES", "0")            # quiet enough at once
     assert cli.main(["--host", "omp", "--cwd", repo, "toolprune", "apply-pending"]) == 0
     assert len(_deny(env, repo)) == 3 and not os.path.exists(beat)
+
+
+def test_sync_runs_a_judge_job_inline(env, repo, monkeypatch):
+    """TE_SYNC=1 runs a judge job in the hook instead of a detached process."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(live_judge, "spawn_job", _real_spawn_job)
+    seen = []
+    _fake_judges(monkeypatch, seen)
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append(argv))
+    e = {k: v for k, v in env.items() if k != "TE_FOLD_SYNC"}
+    e["TE_SYNC"] = "1"
+    ctx = LiveContext.build(hosts.Omp(), repo, e)
+    guard = SimpleNamespace(turn_key="t0", segment=0, judge_calls=0)
+    job = live_judge.AsyncJudge(ctx, "s", 0).start(guard, "turns=1 ok")
+    assert spawned == []
+    res = ctx.store.read("judge/s.result.json")
+    assert res["id"] == job and seen
+
+
+def test_sync_folds_sessions_inline(env, repo, tmp_path, monkeypatch):
+    """TE_SYNC=1 folds an ended session in the hook instead of a detached process."""
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append(argv))
+    e = {k: v for k, v in env.items() if k != "TE_FOLD_SYNC"}
+    e["TE_SYNC"] = "1"
+    run_session(e, repo, "fsync", trap_session(str(tmp_path / "f.jsonl"), repo, 0))
+    # `repos migrate` keeps its own gate (outside this slice); only the fold must stay in line.
+    assert [a for a in spawned if a[:1] == ["fold"]] == []
+    assert fold.fold_session(LiveContext.build(hosts.Omp(), repo, e), "fsync") is None
+
+
+def test_sync_refreshes_the_repository_map_inline(env, repo, monkeypatch):
+    """TE_SYNC=1 refreshes the repository map in the hook instead of a detached process."""
+    from tokeneconomizer.plugin import repomap
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append(argv))
+    e = {k: v for k, v in env.items() if k != "TE_FOLD_SYNC"}
+    e["TE_SYNC"] = "1"
+    state = repomap.spawn_refresh(LiveContext.build(hosts.Omp(), repo, e))
+    assert spawned == []
+    assert state.get("updated") and "commit" in state
+
+
+def test_sync_leaves_no_detached_waiter_for_a_pending_deny_list(env, repo, tmp_path,
+                                                                monkeypatch):
+    """TE_SYNC=1 skips the detached waiter; the look still reports how long the wait is."""
+    env, _ = _pending_repo(env, repo, tmp_path)
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append(argv))
+    e = {k: v for k, v in env.items() if k != "TE_FOLD_SYNC"}
+    e["TE_SYNC"] = "1"
+    assert fold.schedule_pending(LiveContext.build(hosts.Omp(), repo, e)) > 0
+    assert spawned == []
 
 
 def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(

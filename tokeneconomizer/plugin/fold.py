@@ -27,6 +27,7 @@ import time
 from . import accounting, denylist, sidecall
 from . import adapter as live_adapter
 from .adapter import LiveAdapter, load_catalog
+from .context import detached
 from .hosts import FoldLater
 
 STALE_S = 600          # an unfolded session whose transcript is quiet this long is over
@@ -246,10 +247,10 @@ def apply_pending(ctx, now=None):
 
 def schedule_pending(ctx):
     """Look at the pending deny list now and, if it has to wait, leave a detached
-    `te toolprune apply-pending` to write it later (only the look, when TE_FOLD_SYNC=1)."""
+    `te toolprune apply-pending` to write it later (only the look, when sync mode is on)."""
     wait = apply_pending(ctx)
-    if wait is not None and ctx.env.get("TE_FOLD_SYNC") != "1":
-        ctx.spawn(["toolprune", "apply-pending"], "fold.log")
+    if wait is not None:
+        detached(ctx, "fold", ["toolprune", "apply-pending"], None, sync=("TE_FOLD_SYNC",))
     return wait
 
 
@@ -362,11 +363,12 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
 
 
 def spawn_fold(ctx, session_ids):
-    """Fold sessions in a detached process (inline when TE_FOLD_SYNC=1, for tests). Not while
-    an import of earlier sessions is under way: it folds them once it is done."""
+    """Fold sessions in a detached process (inline when TE_SYNC=1 or TE_FOLD_SYNC=1, for
+    tests). Not while an import of earlier sessions is under way: it folds them once it is
+    done."""
     if not session_ids:
         return None
-    if ctx.env.get("TE_FOLD_SYNC") == "1":
-        return [fold_session(ctx, sid) for sid in session_ids]
-    return ctx.spawn(["fold"] + [a for sid in session_ids for a in ("--session", sid)],
-                     "fold.log")
+    return detached(ctx, "fold",
+                    ["fold"] + [a for sid in session_ids for a in ("--session", sid)],
+                    lambda: [fold_session(ctx, sid) for sid in session_ids],
+                    sync=("TE_FOLD_SYNC",))

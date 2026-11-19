@@ -94,3 +94,18 @@ class LiveContext:
         finally:
             log.close()
         return True
+
+
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def detached(ctx, name, argv, inline, *, sync=()):
+    """Run `argv` detached, or call `inline` when a sync flag is set in `ctx.env`.
+
+    `TE_SYNC` runs every job in line; each name in `sync` is that job's earlier flag, which
+    keeps working as an alias. `inline` is `None` when the job has nothing to do in line
+    (a look that only leaves a waiter when it must wait): then sync mode skips it."""
+    if _truthy(ctx.env.get("TE_SYNC")) or any(_truthy(ctx.env.get(key)) for key in sync):
+        return inline() if inline is not None else None
+    return ctx.spawn(argv, f"{name}.log")
