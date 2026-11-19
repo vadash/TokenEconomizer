@@ -51,7 +51,12 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   made-up sessions and no numbers.
 - The plugin's own text (`plugin/`, its manifests, slash commands and skills, and what the
   hooks print) makes no claims of effect.
-- Tests: `python -m pytest tests experiments/tests`. A change to what the plugin learns or
-  decides should be checked against recorded sessions, not only the unit tests.
+- Tests (the CI command): `COLUMNS=200 python -m pytest tests` (`experiments/tests` is
+  benchmark-only and CI never runs it). On a Windows Git-Bash harness also prefix
+  `env -u MSYS_NO_PATHCONV` and redirect stdin from a real file (`< README.md`); without
+  them launcher/subprocess tests fail with `WinError 6`. A change to what the plugin learns
+  or decides should be checked against recorded sessions, not only the unit tests.
 - Every model-backed test goes through the agent's own CLI on a provider you control
   (OpenRouter in development); never hard-code a key.
+- omp display channel: `docs/OMP-HARNESS.md` (notify vs sendMessage vs overlay, link rules,
+  loader remap) — read it before touching `plugin/omp/` or `/te` output.
