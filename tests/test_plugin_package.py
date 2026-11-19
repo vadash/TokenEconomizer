@@ -184,8 +184,8 @@ def test_the_plugin_ships_and_loads_no_benchmark_code():
     for gone in ("adapters", "mechanisms", "vendor", "facade.py", "workloads.py", "runner.py",
                  "arms.py", "baselines"):
         assert not os.path.exists(os.path.join(shipped, gone)), gone
-    mods = ("hook", "controller", "fold", "cli", "denylist", "repomap",
-            "sidecall", "judge", "adapter", "hookqueue")
+    mods = ("hook", "controller", "turnsession", "fold", "cli", "denylist", "repomap",
+            "sidecall", "judge", "adapter")
     probe = ("import sys\n" + "".join(f"import tokeneconomizer.plugin.{m}\n" for m in mods)
              + "print(sorted({m.split('.')[0] for m in sys.modules} "
                "& {'te_bench', 'te_harness', 'te_live'}))")

@@ -22,8 +22,8 @@ def _truthy(v):
 
 def run(payload, env, host_hint=None):
     """Handle one hook payload; returns the output dict (no I/O, so tests call it directly)."""
+    from . import turnsession
     from .context import LiveContext
-    from .controller import LiveController
     from .hosts import Omp
     host = Omp()
     payload = host.prepare(payload, env)
@@ -31,7 +31,7 @@ def run(payload, env, host_hint=None):
                             session_id=host.session_id(payload) or None, settle=False)
     if not ctx.config.enabled:
         return {}
-    out = LiveController(ctx, payload).handle()
+    out = turnsession.handle(ctx, payload)
     # The omp answer has its own shape: the extension applies `omp.denyTools` at session start.
     return host.render(payload, out, ctx)
 

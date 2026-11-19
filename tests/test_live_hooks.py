@@ -18,8 +18,8 @@ import time
 import pytest
 
 from tokeneconomizer.plugin import denylist, fold, hook, hosts
+from tokeneconomizer.plugin import turnsession
 from tokeneconomizer.plugin.context import LiveContext
-from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
 
@@ -875,9 +875,9 @@ def test_garbage_input_and_internal_errors_answer_no_change(env, repo, monkeypat
     hook.main([], io.StringIO("not json"), out, env)
     assert json.loads(out.getvalue()) == {}
 
-    def boom(self):
+    def boom(ctx, payload, now=None):
         raise RuntimeError("bug")
-    monkeypatch.setattr(LiveController, "handle", boom)
+    monkeypatch.setattr(turnsession, "handle", boom)
     assert call(env, {"hook_event_name": "Stop", "session_id": "s", "cwd": repo}) == {}
     log = open(os.path.join(env["TOKENECONOMIZER_HOME"], "errors.log")).read()
     assert "RuntimeError: bug" in log

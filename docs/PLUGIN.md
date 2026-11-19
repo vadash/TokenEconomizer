@@ -46,7 +46,7 @@ Every entry point fails open: any error becomes an empty output (no change) and 
 `%USERPROFILE%\.tokeneconomizer\errors.log`. The dispatcher is stdlib only, and never waits on
 a model call.
 
-One session's events run one at a time (`plugin/hookqueue.py`): events that arrive together are
+One session's events run one at a time (`tokeneconomizer/plugin/turnsession.py`): events that arrive together are
 serialized through the session document. A handler that gets no lock within a few seconds saves
 its event to the session's queue and answers nothing, and whoever holds the lock applies the
 queue. `session_start`, and prompt admissions under `repomap=on`, answer with context, so they

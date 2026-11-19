@@ -1,21 +1,21 @@
-"""One session's hooks run one at a time (`plugin/hookqueue.py`).
+"""One session's hooks run one at a time (`plugin/turnsession.py`).
 
 The first test is the report in #142: real hook processes started together, against a throwaway
-state root where no agent CLI is reachable, so nothing calls a model. The others hold the session's
-lock themselves, which makes a hook queue every time.
+state root where no agent CLI is reachable, so nothing calls a model. The rest drive the turn seam
+(`turnsession.handle`) with a scripted lock and a stepped clock: a lock miss queues and answers
+`{}`, the next live call applies what queued exactly once, a redirect reached on a queued call
+goes out with the next live one, and a turn that ends first drops it with an `undelivered` log.
 """
+import contextlib
 import glob
 import json
 import os
 import subprocess
 import sys
-import time
-from types import SimpleNamespace
 
 import pytest
 
-from tokeneconomizer.plugin import hookqueue
-from tokeneconomizer.plugin.controller import LiveController
+from tokeneconomizer.plugin import turnsession
 from tokeneconomizer.plugin.store import Store
 
 from test_live_hooks import (GREEN, _first, _post, _turn, call, env, repo,  # noqa: F401
@@ -23,18 +23,34 @@ from test_live_hooks import (GREEN, _first, _post, _turn, call, env, repo,  # no
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 READ = ("Read", {"file_path": "/r/a.py"}, "ok")
+NOW = 1700000000.0
 
 
 def base(repo, sid="s", key="k"):
     return {"session_id": sid, "transcript_path": "", "cwd": repo, "prompt_id": key}
 
 
-def start_turn(env, repo, sid="s", key="k"):
-    call(env, dict(base(repo, sid, key), hook_event_name="UserPromptSubmit", prompt="go"))
+def tcall(env, repo, payload, now):
+    """One hook call through the turn seam with an explicit clock (what `hook.main` runs)."""
+    from tokeneconomizer.plugin.context import LiveContext
+    from tokeneconomizer.plugin.hosts import Omp
+    host = Omp()
+    p = host.prepare(dict(payload), env)
+    ctx = LiveContext.build(host, host.cwd(p, env), env,
+                            session_id=host.session_id(p) or None, settle=False)
+    if not ctx.config.enabled:
+        return {}
+    return host.render(p, turnsession.handle(ctx, p, now=now), ctx)
 
 
-def stop_turn(env, repo, sid="s", key="k"):
-    call(env, dict(base(repo, sid, key), hook_event_name="Stop", stop_hook_active=False))
+def start_turn(env, repo, sid="s", key="k", now=NOW):
+    return tcall(env, repo, dict(base(repo, sid, key), hook_event_name="UserPromptSubmit",
+                                prompt="go"), now)
+
+
+def stop_turn(env, repo, sid="s", key="k", now=NOW):
+    return tcall(env, repo, dict(base(repo, sid, key), hook_event_name="Stop",
+                                stop_hook_active=False), now)
 
 
 def locks(env):
@@ -49,11 +65,18 @@ def waiting(env, sid="s"):
     return len(glob.glob(os.path.join(queue_of(env, sid), "*.json")))
 
 
-def behind_the_lock(env, payload, sid="s"):
-    """One hook call while another hook of the session holds its lock."""
-    with Store(locks(env)).locked(sid, timeout=2) as got:
-        assert got
-        return call(env, payload)
+@pytest.fixture
+def grants(monkeypatch):
+    """The session lock's scripted answers: each hook call takes the next, else takes it."""
+    script = []
+
+    class FakeStore(Store):
+        @contextlib.contextmanager
+        def locked(self, name="state", timeout=10.0):
+            yield script.pop(0) if script else True
+
+    monkeypatch.setattr(turnsession, "Store", FakeStore)
+    return script
 
 
 def doc(env, repo, sid="s"):
@@ -63,12 +86,6 @@ def doc(env, repo, sid="s"):
 def events(env, repo, kind, sid="s"):
     return [e for e in store_for(env, repo).read_lines("events.jsonl")
             if e.get("kind") == kind and e.get("session_id") == sid]
-
-
-@pytest.fixture
-def short_waits(monkeypatch):
-    for event in hookqueue.WAITS:
-        monkeypatch.setitem(hookqueue.WAITS, event, 0.01)
 
 
 # ---- the report -----------------------------------------------------------------------------
@@ -109,127 +126,60 @@ def test_tool_calls_made_in_parallel_are_all_recorded(tmp_path):
 
 
 # ---- queueing -------------------------------------------------------------------------------
-def test_a_hook_without_the_lock_queues_and_the_next_one_applies_it(env, repo, short_waits):
-    start_turn(env, repo)
-    assert behind_the_lock(env, _post(base(repo), *READ)) == {}
+def test_a_hook_without_the_lock_queues_and_the_next_one_applies_it(env, repo, grants):
+    start_turn(env, repo, now=NOW)
+    grants.append(False)
+    assert tcall(env, repo, _post(base(repo), *READ), NOW + 1) == {}
     assert waiting(env) == 1 and doc(env, repo)["turn"]["cum_turns"] == 0
-    call(env, _post(base(repo), *READ))
+    tcall(env, repo, _post(base(repo), *READ), NOW + 2)
     assert waiting(env) == 0 and doc(env, repo)["turn"]["cum_turns"] == 2
+    assert doc(env, repo)["updated"] == NOW + 2
 
 
-def test_the_holder_applies_what_queued_behind_it(env, repo, monkeypatch):
-    start_turn(env, repo)
-    real = LiveController.post_tool
-
-    def holder(self):
-        out = real(self)
-        if not self.replaying:
-            hookqueue.enqueue(queue_of(env), _post(base(repo), *READ))
-        return out
-
-    monkeypatch.setattr(LiveController, "post_tool", holder)
-    call(env, _post(base(repo), *READ))
-    assert waiting(env) == 0 and doc(env, repo)["turn"]["cum_turns"] == 2
-
-
-def test_queued_events_apply_oldest_first(env, repo, short_waits):
+def test_queued_events_apply_oldest_first(env, repo, grants):
     prompt = dict(base(repo), hook_event_name="UserPromptSubmit", prompt="go")
-    assert behind_the_lock(env, prompt) == {}
-    assert behind_the_lock(env, _post(base(repo), *READ)) == {}
-    call(env, _post(base(repo), *READ))
+    grants.extend([False, False])
+    assert tcall(env, repo, prompt, NOW + 1) == {}
+    assert tcall(env, repo, _post(base(repo), *READ), NOW + 2) == {}
+    tcall(env, repo, _post(base(repo), *READ), NOW + 3)
     turn = doc(env, repo)["turn"]
     assert turn["turn_key"] == "k" and turn["cum_turns"] == 2
 
 
-def test_session_start_answers_itself(env, repo, short_waits):
+def test_session_start_answers_itself(env, repo, grants):
     start = dict(base(repo), hook_event_name="SessionStart", source="startup")
-    behind_the_lock(env, start)
+    grants.append(False)
+    tcall(env, repo, start, NOW)
     assert waiting(env) == 0 and doc(env, repo)["source"] == "startup"
 
 
-def test_a_prompt_that_may_carry_the_map_is_not_queued():
-    def ctrl(repomap):
-        return SimpleNamespace(cfg=SimpleNamespace(repomap=repomap))
-    assert hookqueue._queues(ctrl("off"), "UserPromptSubmit")
-    assert hookqueue._queues(ctrl("start"), "UserPromptSubmit")
-    assert not hookqueue._queues(ctrl("on"), "UserPromptSubmit")
-    assert hookqueue._queues(ctrl("on"), "PostToolUse")
-    assert not hookqueue._queues(ctrl("off"), "SessionStart")
-
-
-def test_a_hook_that_cannot_queue_runs(env, repo, short_waits, monkeypatch):
-    start_turn(env, repo)
-    monkeypatch.setattr(hookqueue, "enqueue", lambda queue, payload: False)
-    behind_the_lock(env, _post(base(repo), *READ))
-    assert doc(env, repo)["turn"]["cum_turns"] == 1
-
-
-def test_a_replay_that_fails_does_not_fail_the_hook_replaying_it(env, repo, short_waits,
-                                                                  monkeypatch):
-    start_turn(env, repo)
-    behind_the_lock(env, _post(base(repo), *READ))
-    real = LiveController.post_tool
-
-    def broken(self):
-        if self.replaying:
-            raise RuntimeError("replayed")
-        return real(self)
-
-    monkeypatch.setattr(LiveController, "post_tool", broken)
-    assert call(env, _post(base(repo), *READ)) == {}
-    assert waiting(env) == 0 and doc(env, repo)["turn"]["cum_turns"] == 1
-    with open(os.path.join(env["TOKENECONOMIZER_HOME"], "errors.log"), encoding="utf-8") as fh:
-        assert "RuntimeError: replayed" in fh.read()
-
-
 def test_an_unreadable_queue_entry_is_dropped(env, repo):
-    start_turn(env, repo)
+    start_turn(env, repo, now=NOW)
     os.makedirs(queue_of(env))
     with open(os.path.join(queue_of(env), "0.json"), "w", encoding="utf-8") as fh:
         fh.write("{not json")
-    call(env, _post(base(repo), *READ))
+    tcall(env, repo, _post(base(repo), *READ), NOW + 1)
     assert waiting(env) == 0 and doc(env, repo)["turn"]["cum_turns"] == 1
 
 
-def test_idle_locks_go_and_a_queue_with_events_stays(tmp_path):
-    base_dir = str(tmp_path)
-    old = time.time() - hookqueue.IDLE_S - 60
-    paths = {name: os.path.join(base_dir, name)
-             for name in (".gone.lock", ".kept.lock", "gone.queue", "kept.queue")}
-    for name in (".gone.lock", ".kept.lock"):
-        open(paths[name], "w", encoding="utf-8").close()
-    os.makedirs(paths["gone.queue"])
-    os.makedirs(paths["kept.queue"])
-    open(os.path.join(paths["kept.queue"], "1.json"), "w", encoding="utf-8").close()
-    for name in (".gone.lock", "gone.queue", "kept.queue"):
-        os.utime(paths[name], (old, old))
-    hookqueue._prune(base_dir)
-    assert sorted(n for n in os.listdir(base_dir) if n != ".pruned") == [".kept.lock", "kept.queue"]
+def test_a_call_without_a_session_and_an_unknown_event_answer_nothing(env, repo):
+    assert tcall(env, repo, {"hook_event_name": "Stop", "cwd": repo}, NOW) == {}
+    assert tcall(env, repo, dict(base(repo), hook_event_name="Nope"), NOW) == {}
+    assert not os.path.exists(store_for(env, repo).base)
 
 
-def test_the_prune_leaves_the_lock_of_a_session_older_than_idle(tmp_path):
-    """A session's lock file is made at its first hook, and taking the lock writes nothing to it,
-    so the file of a session running for longer than IDLE_S looked idle. The prune removed it
-    while a hook held it, and on POSIX a parallel hook of that session then locked a new file
-    and ran beside the holder."""
-    base_dir = os.path.join(str(tmp_path), "locks", "omp")
-    os.makedirs(base_dir)
-    lock = os.path.join(base_dir, ".s.lock")
-    open(lock, "w", encoding="utf-8").close()
-    old = time.time() - hookqueue.IDLE_S - 60
-    os.utime(lock, (old, old))
-    ctrl = SimpleNamespace(ctx=SimpleNamespace(root=str(tmp_path)),
-                           host=SimpleNamespace(name="omp"), sid="s", p={},
-                           cfg=SimpleNamespace(repomap="off"))
-    beside = []
+def test_an_internal_error_answers_nothing_and_is_logged(env, repo, monkeypatch):
+    start_turn(env, repo, now=NOW)
 
-    def handler():
-        with Store(base_dir).locked("s", timeout=0.1) as got:
-            beside.append(got)
-        return {}
-    assert hookqueue.run(ctrl, "PostToolUse", handler) == {}
-    assert beside == [False]
-    assert os.path.getmtime(lock) > old + hookqueue.IDLE_S
+    class BrokenStore(Store):
+        @contextlib.contextmanager
+        def locked(self, name="state", timeout=10.0):
+            raise RuntimeError("broken lock")
+
+    monkeypatch.setattr(turnsession, "Store", BrokenStore)
+    assert tcall(env, repo, _post(base(repo), *READ), NOW + 1) == {}
+    with open(os.path.join(env["TOKENECONOMIZER_HOME"], "errors.log"), encoding="utf-8") as fh:
+        assert "RuntimeError: broken lock" in fh.read()
 
 
 # ---- what a queued hook would have said -----------------------------------------------------
@@ -246,21 +196,21 @@ def stuck_turn(env, repo):
 
 
 def run_until(env, repo, calls, end):
-    start_turn(env, repo)
-    return [call(env, _post(base(repo), *c)) for c in calls[:end]]
+    start_turn(env, repo, now=NOW)
+    return [tcall(env, repo, _post(base(repo), *c), NOW + 1 + i) for i, c in enumerate(calls[:end])]
 
 
 @pytest.mark.parametrize("ahead", [1, 2], ids=["next call", "the call after"])
-def test_a_redirect_reached_on_a_queued_call_goes_out_with_the_next_one(env, repo, short_waits,
-                                                                        ahead):
+def test_a_redirect_reached_on_a_queued_call_goes_out_with_the_next_one(env, repo, grants, ahead):
     """`stuck_calls` alternates success and failure, so the two cases are the two events the
     answer can be labelled with; a failed call's answer labelled PostToolUse would be dropped."""
     calls, nudge, _ = stuck_turn(env, repo)
     assert all(o == {} for o in run_until(env, repo, calls, nudge))
-    assert behind_the_lock(env, _post(base(repo), *calls[nudge])) == {}
+    grants.append(False)
+    assert tcall(env, repo, _post(base(repo), *calls[nudge]), NOW + 100) == {}
     assert not events(env, repo, "nudge")                     # queued: nothing decided or spent
     payload = _post(base(repo), *calls[nudge + ahead])
-    out = call(env, payload)
+    out = tcall(env, repo, payload, NOW + 101)
     specific = out["hookSpecificOutput"]
     assert specific["hookEventName"] == payload["hook_event_name"]
     assert "Process check (automated)" in specific["additionalContext"]
@@ -268,35 +218,39 @@ def test_a_redirect_reached_on_a_queued_call_goes_out_with_the_next_one(env, rep
     assert len(events(env, repo, "nudge")) == 1 and doc(env, repo)["nudges"] == 1
 
 
-def test_a_redirect_held_for_the_next_call_is_said_once(env, repo, short_waits):
+def test_a_redirect_held_for_the_next_call_is_said_once(env, repo, grants):
     calls, nudge, _ = stuck_turn(env, repo)
     run_until(env, repo, calls, nudge)
-    behind_the_lock(env, _post(base(repo), *calls[nudge]))
-    behind_the_lock(env, _post(base(repo), *calls[nudge + 1]))     # a second one behind it
+    grants.extend([False, False])
+    tcall(env, repo, _post(base(repo), *calls[nudge]), NOW + 100)
+    tcall(env, repo, _post(base(repo), *calls[nudge + 1]), NOW + 101)     # a second one behind it
     assert waiting(env) == 2
-    outs = [call(env, _post(base(repo), *c)) for c in calls[nudge + 2:nudge + 4]]
+    outs = [tcall(env, repo, _post(base(repo), *c), NOW + 102 + i)
+            for i, c in enumerate(calls[nudge + 2:nudge + 4])]
     assert "hookSpecificOutput" in outs[0] and outs[1] == {}
     assert len(events(env, repo, "nudge")) == 1
 
 
-def test_a_turn_that_ends_first_drops_the_redirect_uncounted(env, repo, short_waits):
+def test_a_turn_that_ends_first_drops_the_redirect_uncounted(env, repo, grants):
     calls, nudge, _ = stuck_turn(env, repo)
     run_until(env, repo, calls, nudge)
-    behind_the_lock(env, _post(base(repo), *calls[nudge]))
-    stop_turn(env, repo)
+    grants.append(False)
+    tcall(env, repo, _post(base(repo), *calls[nudge]), NOW + 100)
+    stop_turn(env, repo, now=NOW + 101)
     session = doc(env, repo)
     assert session["nudges"] == 0 and session["turns"][-1]["nudges"] == 0
     assert not events(env, repo, "nudge")
     assert [e["action"] for e in events(env, repo, "undelivered")] == ["nudge"]
-    start_turn(env, repo, key="k2")                           # and nothing leaks into the next
-    assert call(env, _post(base(repo, key="k2"), *READ)) == {}
+    start_turn(env, repo, key="k2", now=NOW + 102)                           # nothing leaks on
+    assert tcall(env, repo, _post(base(repo, key="k2"), *READ), NOW + 103) == {}
 
 
-def test_the_stop_notice_reached_on_a_queued_call_goes_out_too(env, repo, short_waits):
+def test_the_stop_notice_reached_on_a_queued_call_goes_out_too(env, repo, grants):
     calls, _, notice = stuck_turn(env, repo)
     run_until(env, repo, calls, notice)
-    assert behind_the_lock(env, _post(base(repo), *calls[notice])) == {}
-    out = call(env, _post(base(repo), *calls[notice + 1]))
+    grants.append(False)
+    assert tcall(env, repo, _post(base(repo), *calls[notice]), NOW + 100) == {}
+    out = tcall(env, repo, _post(base(repo), *calls[notice + 1]), NOW + 101)
     assert "still looks stuck" in out["systemMessage"]
     assert doc(env, repo)["aborts"] == 1
-    assert call(env, _post(base(repo), *calls[notice + 2])) == {}
+    assert tcall(env, repo, _post(base(repo), *calls[notice + 2]), NOW + 102) == {}

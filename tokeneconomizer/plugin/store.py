@@ -4,7 +4,7 @@ Two Claude Code sessions in one repository run their hooks concurrently, and a s
 background fold can overlap the next session's start. Every read-modify-write of shared state
 therefore happens under an exclusive lock on a sibling lock file, and every write lands through a
 temporary file and `os.replace`, so a reader never sees half a document. A session document is
-written by that session's own hooks, which `hookqueue` runs one at a time, so it needs no lock here.
+written by that session's own hooks, which `turnsession` runs one at a time, so it needs no lock here.
 
 Locking uses `fcntl.flock`, and `msvcrt.locking` on Windows. Where neither is available the lock
 degrades to a no-op rather than failing the hook: a lost update is recoverable, a crashed hook is
