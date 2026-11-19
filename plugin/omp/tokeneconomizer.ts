@@ -21,7 +21,8 @@
  * Like the hooks on the other agents it fails open: a dispatcher that is missing, slow or
  * broken answers "no change". It does nothing under TE_SIDECALL=1 (the plugin's own side
  * calls) or TE_DISABLE=1. `/te <command>` runs the `te` command line for this repository and
- * shows its output in a user-only overlay panel.
+ * shows its output in a user-only overlay panel; `/te config` shows links to the two config files
+ * instead of that output.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getMarkdownTheme, Markdown } from "@oh-my-pi/pi-coding-agent";
@@ -294,18 +295,6 @@ function repoKey(cwd: string): string {
   return `${slug(name)}-${createHash("sha1").update(canon, "utf8").digest("hex").slice(0, 10)}`;
 }
 
-/** The `config.json` a `config` command writes: the repository's when it exists, else the
- * global one in effect. A `config set` writes the repository's file, or the global one with
- * `--global`; the command resolves the repository from `--cwd`, not from a session pin. */
-function configTarget(cwd: string, global: boolean): { path: string; exists: boolean; repoExists: boolean } {
-  const root = stateRoot();
-  const repo = join(root, "repos", repoKey(cwd), "config.json");
-  const repoExists = existsSync(repo);
-  if (!global && repoExists) return { path: repo, exists: true, repoExists };
-  const path = join(root, "config.json");
-  return { path, exists: existsSync(path), repoExists };
-}
-
 /** The CLI's stdout as one fenced block, so no line of it is re-read as Markdown. The fence is
  * longer than any backtick run in the output, which a learned fact can contain. */
 function resultPanel(out: string): string {
@@ -328,12 +317,20 @@ function indexPanel(help: string, cwd: string): string {
   return `${bullets}\n\nstate \`${join(stateRoot(), "repos", repoKey(cwd), "omp")}\``;
 }
 
-/** The config file as an explicit Markdown link (which the renderer turns into a terminal
- * hyperlink) plus the same full path as plain text, since a bare path is not linked. */
-function configLink(cwd: string, global: boolean): string {
-  const target = configTarget(cwd, global);
-  const note = target.exists ? "" : " (not created yet — config set writes it)";
-  return `[\`config.json\`](${pathToFileURL(target.path).href})\n\n\`${target.path}\`${note}`;
+/** The two `config.json` files `/te config` points at, each as an explicit Markdown link (which
+ * the renderer turns into a terminal hyperlink) plus the same full path as plain text, since a
+ * bare path is not linked. A `config set` writes the repository's file, or the global one with
+ * `--global`; the repository comes from `--cwd`, not from a session pin. */
+function configPanel(cwd: string, global: boolean): string {
+  const root = stateRoot();
+  const entry = (label: string, path: string) => {
+    const note = existsSync(path) ? "" : " (not created yet — config set writes it)";
+    return `[\`config.json (${label})\`](${pathToFileURL(path).href})\n\n\`${path}\`${note}`;
+  };
+  const target = global
+    ? "`config set` writes the global `config.json` (`--global`)."
+    : "`config set` writes this repository's `config.json`; add `--global` to write the global one.";
+  return `${entry("this repo", join(root, "repos", repoKey(cwd), "config.json"))}\n\n${entry("global", join(root, "config.json"))}\n\n${target}`;
 }
 
 /** Render `markdown` in a user-only overlay. The panel is never a session entry, so it costs no
@@ -513,7 +510,8 @@ export default function tokeneconomizer(api: ExtensionAPI) {
     handler: async (args, ctx) => {
       // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
       // Bare `/te` asks for the CLI's one-line subcommand list, which the panel turns into the
-      // index; a subcommand's output is shown as it printed.
+      // index; a subcommand's output is shown as it printed, except `config`, which shows the two
+      // config files.
       const argline = (args || "").trim();
       const sessionId = ctx.sessionManager.getSessionId();
       // The session id lets `te status` say when this session is recorded under the repository
@@ -525,11 +523,12 @@ export default function tokeneconomizer(api: ExtensionAPI) {
         ctx.mode,
         { TE_SESSION_ID: sessionId },
       );
-      let markdown = argline ? resultPanel(out) : indexPanel(out, ctx.cwd);
-      if (argline.split(/\s+/)[0] === "config") {
+      let markdown: string;
+      if (!argline) markdown = indexPanel(out, ctx.cwd);
+      else if (argline.split(/\s+/)[0] === "config") {
         const global = /(?:^|\s)--global(?:ly)?(?:\s|$)/.test(argline);
-        markdown += `\n\n${configLink(ctx.cwd, global)}`;
-      }
+        markdown = configPanel(ctx.cwd, global);
+      } else markdown = resultPanel(out);
       showPanel(ctx, markdown);
     },
   });

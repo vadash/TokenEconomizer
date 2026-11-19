@@ -13,9 +13,12 @@ for it again).
 **Progressive disclosure.** Bare `/te` is the full index overlay; a subcommand shows its own result
 and that subcommand's next actions only. Hover tips stay per-command and contextual.
 
-**Full Windows path beside the file link.** The overlay appends a Markdown link to the target
-`config.json` plus a plain full-path line, because the terminal must resolve the path without the
-link renderer.
+**Two config links, no dump.** `/te config` shows exactly two entries, the repository's
+`config.json` and the global one, and never the captured stdout the CLI prints for other hosts.
+Each entry is a Markdown link, labelled `config.json (this repo)` and `config.json (global)`, plus
+the plain full Windows path, because the terminal must resolve the path without the link renderer;
+an absent file adds `(not created yet — config set writes it)`. One trailing line names which file
+`config set` writes: the repository's, or the global one with `--global`.
 
 ## Considered Options
 
