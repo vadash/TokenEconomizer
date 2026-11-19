@@ -132,14 +132,11 @@ def test_merge_outputs_concatenates_contexts_and_notices():
     assert m["systemMessage"] == "n1\nn2"
 
 
-def test_omp_is_the_only_host_and_a_hint_selects_nothing_else():
-    assert hosts.HOSTS == {"omp": hosts.Omp}
-    assert hosts.detect({"hook_event_name": "Stop"}).name == "omp"
-    assert hosts.detect({}, hint="omp").name == "omp"
-    assert hosts.detect({"turn_id": "t"}, hint="codex").name == "omp"
-    assert hosts.default_host({}) == "omp"
-    assert hosts.default_host({"TE_HOST": "omp"}) == "omp"
-    assert hosts.default_host({"TE_HOST": "nonsense"}) == "omp"
+def test_there_is_no_host_registry_left_to_select():
+    assert not hasattr(hosts, "HOSTS")
+    assert not hasattr(hosts, "detect") and not hasattr(hosts, "default_host")
+    assert not hasattr(hosts, "Host") and hosts.Omp.__bases__ == (object,)
+    assert hosts.Omp().name == "omp"
 
 
 # ---- omp sessions -------------------------------------------------------------------------
@@ -235,7 +232,6 @@ def test_the_omp_host_reads_what_the_extension_sends():
                                                             "isError": True, "exit_code": 1}})
     assert (name, args["command"], code) == ("bash", "go test", 1) and "FAIL" in text
     assert h.headless({"TE_OMP_MODE": "print"}) and not h.headless({"TE_OMP_MODE": "tui"})
-    assert hosts.detect({"prompt_id": "t"}, hint="omp").name == "omp"
 
 
 # ---- the guard sees edits made through the shell ---------------------------------------------

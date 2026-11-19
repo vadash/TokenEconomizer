@@ -335,7 +335,7 @@ def test_the_guard_redirects_then_tells_the_person_how_to_stop(env, repo, mode, 
     stuck = [shown(o) for o in outs if "still looks stuck" in shown(o)]
     assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
     assert len(stuck) == 1                                             # one notice
-    assert stuck[0].endswith(hosts.HOSTS["omp"]().stop_hint(mode == "headless"))
+    assert stuck[0].endswith(hosts.Omp().stop_hint(mode == "headless"))
     assert len(to_model) == 1                                          # the redirect alone
 
 
@@ -967,4 +967,4 @@ def test_omp_print_mode_counts_as_headless_for_the_stop_hint(env, repo):
     outs = _guard_turn(penv, repo, "p", "stuck", _stuck())
     notice = next(o["systemMessage"] for o in outs
                   if "still looks stuck" in o.get("systemMessage", ""))
-    assert notice.endswith(hosts.HOSTS["omp"]().stop_hint(True))
+    assert notice.endswith(hosts.Omp().stop_hint(True))

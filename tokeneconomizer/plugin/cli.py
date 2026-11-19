@@ -59,8 +59,7 @@ from .paths import state_root
 
 
 def _ctx(args, env=None, session_id=None):
-    host = hosts.HOSTS[args.host]()
-    return LiveContext.build(host, args.cwd, env, session_id=session_id)
+    return LiveContext.build(hosts.Omp(), args.cwd, env, session_id=session_id)
 
 
 def _unwritable(path):
@@ -725,13 +724,7 @@ def cmd_history(args):
     if args.action == "status" or args.status:
         _print_history(ctx, history.summary(ctx))
         return 0
-    if not ctx.host.keeps_history:
-        print(f"{ctx.host.name}: no session history the plugin reads")
-        return 1
-    res = history.run(ctx, auto=args.auto, log=lambda line: print(line, flush=True))
-    if args.auto:
-        return 0
-    print(f"not imported: {res['reason']}")
+    print(f"{ctx.host.name}: no session history the plugin reads")
     return 1
 
 
@@ -921,12 +914,12 @@ def build_parser():
     ap = argparse.ArgumentParser(prog="te", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cwd", default=os.getcwd())
-    ap.add_argument("--host", default=None, choices=sorted(hosts.HOSTS))
+    ap.add_argument("--host", default=None)
     # The same two options are accepted after the subcommand too (`te fold --host codex ...`).
     # SUPPRESS keeps a subcommand that omits them from overwriting the top-level values.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cwd", default=argparse.SUPPRESS)
-    common.add_argument("--host", default=argparse.SUPPRESS, choices=sorted(hosts.HOSTS))
+    common.add_argument("--host", default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd")
     ap.set_defaults(fn=cmd_help)  # bare `te` prints the list, as `te help` does
 
@@ -990,20 +983,13 @@ def build_parser():
 
 
 def _recent_host(cwd):
-    """The agent whose state for this repository changed last, or None: from a plain terminal,
-    a Codex or Pi user means their own agent's state without typing `--host`."""
+    """The host whose state for this repository changed last ("omp" when there is any)."""
     from .paths import repo_identity, repo_state_dir
     try:
         repo = repo_identity(cwd)
     except OSError:
         return None
-    seen = {}
-    for name in hosts.HOSTS:
-        d = repo_state_dir(repo, name)
-        if os.path.isdir(d):
-            seen[name] = max([os.path.getmtime(d)] + [os.path.getmtime(os.path.join(d, f))
-                                                      for f in os.listdir(d)])
-    return max(seen, key=seen.get) if seen else None
+    return "omp" if os.path.isdir(repo_state_dir(repo, "omp")) else None
 
 
 def _split_argline(line):
@@ -1036,8 +1022,7 @@ def main(argv=None):
         print(f"te: could not read the arguments: {e}")
         return 2
     args = build_parser().parse_args(argv)
-    if args.host is None:
-        args.host = hosts.default_host(recent=_recent_host(args.cwd))
+    args.host = "omp"
     try:
         return args.fn(args) or 0
     finally:

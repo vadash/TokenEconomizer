@@ -1,4 +1,4 @@
-"""The omp host adapter, and the contract its hook calls share.
+"""The omp host adapter: what the plugin's hooks and commands call per event.
 
 omp has no hook protocol of its own: the TypeScript extension in `plugin/omp/` speaks the
 dispatcher's on its behalf. Each event becomes one JSON payload on stdin (`session_id`,
@@ -90,8 +90,26 @@ def _exit_code(resp):
     return None
 
 
-class Host:
-    name = "?"
+class Omp:
+    """oh-my-pi (`omp`), through the TypeScript extension in `plugin/omp/`.
+
+    The extension speaks the dispatcher's contract on omp's behalf and applies the answer with
+    omp's own levers (a system-prompt block, a steer message, the session's tool deny list).
+    What it sends:
+
+      * `prompt_id`, which it numbers itself, for the turn identity omp does not stamp;
+      * `tool_response = {content, isError, exit_code}`, its bash result's real exit code;
+      * its mode in `TE_OMP_MODE` on the hook's environment: print / json / rpc are headless.
+
+    A resumed conversation does not carry what its first start added. Its subagents are full
+    sessions of their own, not sidechains marked in the parent, so the loop guard covers every
+    session at every depth.
+    """
+    name = "omp"
+    # omp's terminal works as Pi's does: Esc aborts the turn and its command; Ctrl+C ends
+    # `omp -p`, but a command it started runs on (detached) until it finishes.
+    interrupt = "Press Esc to abort it."
+    end_run = "Press Ctrl+C to end the run; a command it started runs on until it finishes."
 
     def session_id(self, p):
         return str(p.get("session_id") or "")
@@ -108,10 +126,7 @@ class Host:
         return str(env.get("TE_SESSION_ID") or "")
 
     def turn_key(self, p):
-        return ""
-
-    def is_subagent(self, p):
-        return bool(p.get("agent_id"))
+        return str(p.get("prompt_id") or "")
 
     def context(self, event, text):
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
@@ -122,100 +137,14 @@ class Host:
     def stop_hint(self, headless):
         return self.end_run if headless else self.interrupt
 
-    def stopped_normally(self, p):
-        return True
-
-    def completed_at_end(self, p):
-        """Whether a turn still open at SessionEnd finished normally (its Stop never came)."""
-        return False
-
-    # Whether the loop guard's still-stuck notice must also go through the model, because the
-    # agent does not put hook messages where the person looks.
-    relays_notices = False
-
-    # Whether a resumed conversation still carries the context its first SessionStart added, so
-    # the plugin need not add it again. omp keeps only a digest of its system prompt.
-    keeps_start_context = False
-
-    def relay(self, text):
-        """What the model is asked, so that it passes `text` on to the person, word for word.
-        The notice is the person's to act on: it does not change the model's task."""
-        return ("TokenEconomizer, a plugin the user runs, has a notice for them, and their main "
-                "view does not show plugin messages. Put this line, word for word, in your next "
-                f"message to the user, and again in your final reply:\n\n{text}\n\nIt is for "
-                "the user to act on; it does not change your task.")
-
     def headless(self, env, transcript=None):
-        return False
+        return str(env.get("TE_OMP_MODE", "")).strip() in ("print", "json", "rpc")
 
     def tool_call(self, p):
         """(tool_name, args, result_text, exit_code_or_None) for a PostToolUse payload."""
         args = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
         resp = p.get("tool_response")
         return str(p.get("tool_name") or ""), args, response_text(resp), _exit_code(resp)
-
-    # -- the finished session, in the shapes the mechanisms read --------------------------
-    def mechanism_trace(self, transcript_path, workdir):
-        """Path of a trace `trace.load_trajectory` reads, for the finished session."""
-        return transcript_path if transcript_path and os.path.exists(transcript_path) else None
-
-    def session_usage(self, transcript_path):
-        raise NotImplementedError
-
-    def prompt_count(self, transcript_path):
-        """How many prompts the finished session ran; None where the log does not say."""
-        return None
-
-    def settle(self, transcript_path):
-        """Wait, if this host needs to, until the finished session's log is complete."""
-
-    def complete(self, transcript_path, session_id, cwd=None, session=None):
-        """The log to fold the finished session from."""
-        return transcript_path
-
-    def last_active(self, transcript_path, session):
-        """When a session that never said it ended last did anything (`session`: its state)."""
-        return os.path.getmtime(transcript_path)
-
-    def session_state(self, env):
-        """What a session's state keeps from the environment of its first hook."""
-        return {}
-
-    def tool_usage(self, trace_path):
-        return trace.tool_usage(trace_path)
-
-    # Whether the agent keeps its sessions' logs where the plugin can read the ones from before
-    # it was installed (`history`). omp's state records the sessions the plugin saw only.
-    keeps_history = False
-
-    def history(self, env, extra_dirs=()):
-        return []
-
-
-class Omp(Host):
-    """oh-my-pi (`omp`), through the TypeScript extension in `plugin/omp/`.
-
-    The extension speaks the dispatcher's contract on omp's behalf and applies the answer with
-    omp's own levers (a system-prompt block, a steer message, the session's tool deny list).
-    What it sends:
-
-      * `prompt_id`, which it numbers itself, for the turn identity omp does not stamp;
-      * `tool_response = {content, isError, exit_code}`, its bash result's real exit code;
-      * its mode in `TE_OMP_MODE` on the hook's environment: print / json / rpc are headless.
-
-    A resumed conversation does not carry what its first start added. Its subagents are full
-    sessions of their own, not sidechains marked in the parent, so no session is marked a
-    subagent and the loop guard covers every one at every depth.
-    """
-    name = "omp"
-    prompt_context = True
-    # omp's terminal works as Pi's does: Esc aborts the turn and its command; Ctrl+C ends
-    # `omp -p`, but a command it started runs on (detached) until it finishes.
-    interrupt = "Press Esc to abort it."
-    end_run = "Press Ctrl+C to end the run; a command it started runs on until it finishes."
-
-    def turn_key(self, p):
-        return str(p.get("prompt_id") or "")
 
     def prepare(self, payload, env):
         """Keep the tool catalog this SessionStart reports, merged with what earlier sessions
@@ -250,34 +179,30 @@ class Omp(Host):
                 denylist.applied_for(ctx.store, ctx.repo.root, "omp"))}
         return out
 
-    def is_subagent(self, p):
-        return False
-
-    def headless(self, env, transcript=None):
-        return str(env.get("TE_OMP_MODE", "")).strip() in ("print", "json", "rpc")
-
+    # -- the finished session, in the shapes the mechanisms read --------------------------
     def mechanism_trace(self, transcript_path, workdir):
+        """Path of a trace `trace.load_trajectory` reads, for the finished session."""
         out = os.path.join(workdir, "omp_trace.jsonl")
         n = trace.omp_write_session(transcript_path, out)
         return out if n is not None else None
 
     def prompt_count(self, transcript_path):
+        """How many prompts the finished session ran; None where the log does not say."""
         return trace.omp_prompt_count(transcript_path)
 
     def session_usage(self, transcript_path):
         return trace.omp_session_usage(transcript_path)
 
+    def settle(self, transcript_path):
+        """Wait, if this host needs to, until the finished session's log is complete."""
 
-HOSTS = {"omp": Omp}
+    def complete(self, transcript_path, session_id, cwd=None, session=None):
+        """The log to fold the finished session from."""
+        return transcript_path
 
+    def last_active(self, transcript_path, session):
+        """When a session that never said it ended last did anything (`session`: its state)."""
+        return os.path.getmtime(transcript_path)
 
-def default_host(env=None, recent=None):
-    """omp is the only host. `TE_HOST` is still read, so an existing shell keeps working."""
-    env = os.environ if env is None else env
-    return env["TE_HOST"] if env.get("TE_HOST") in HOSTS else "omp"
-
-
-def detect(payload, env=None, hint=None):
-    """The adapter for this hook call. The extension passes `--host omp` explicitly; a payload
-    or environment is no longer enough to pick another agent."""
-    return HOSTS[hint]() if hint in HOSTS else Omp()
+    def tool_usage(self, trace_path):
+        return trace.tool_usage(trace_path)

@@ -158,11 +158,9 @@ def legacy_key(cwd, env=None):
 # ---- reading one state directory ----------------------------------------------------------------
 def _host_dirs(repo_dir):
     try:
-        return sorted(h for h in os.listdir(repo_dir)
-                      if h in hosts_mod.HOSTS and os.path.isdir(os.path.join(repo_dir, h)))
+        return ["omp"] if os.path.isdir(os.path.join(repo_dir, "omp")) else []
     except OSError:
         return []
-
 
 def _sessions(st):
     """{session_id: record} for one agent's state, counting a session known only to the fold."""
@@ -760,7 +758,7 @@ def refold_moved(done, env=None):
                if m.get("refold") and m.get("cwd")}
     for host, cwd in sorted(targets):
         try:
-            ctx = LiveContext.build(hosts_mod.HOSTS[host](), cwd, env)
+            ctx = LiveContext.build(hosts_mod.Omp(), cwd, env)
             fold.spawn_fold(ctx, fold.pending_sessions(ctx))
         except Exception:
             _record_error(state_root(env))

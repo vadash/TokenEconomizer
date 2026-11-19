@@ -57,8 +57,7 @@ def test_omp_is_headless_only_in_its_print_modes():
 
 def test_every_omp_session_is_its_own_and_never_a_subagent():
     h = Omp()
-    assert h.is_subagent({"agent_id": "sub-1"}) is False
-    assert h.prompt_context is True and h.keeps_start_context is False
+    assert not hasattr(h, "is_subagent")
     assert h.stop_hint(False) == "Press Esc to abort it."
     assert h.stop_hint(True).startswith("Press Ctrl+C to end the run")
 
@@ -85,11 +84,10 @@ def test_the_omp_session_is_read_through_the_trace_seam(tmp_path):
 
 
 def test_omp_is_the_only_host_a_command_or_hook_can_select():
-    assert hosts.default_host({"PI_SESSION_ID": "s"}) == "omp"
-    assert hosts.default_host({"TE_HOST": "omp"}) == "omp"
-    assert hosts.default_host({"TE_HOST": "codex", "PI_SESSION_ID": "s"}) == "omp"
-    assert hosts.detect({}, hint="omp").name == "omp"
-    assert hosts.detect({"turn_id": "t"}, hint="codex").name == "omp"
+    assert not hasattr(hosts, "HOSTS")
+    assert not hasattr(hosts, "detect")
+    assert not hasattr(hosts, "default_host")
+    assert Omp().name == "omp"
 
 
 @pytest.mark.real_sidecalls

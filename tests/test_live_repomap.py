@@ -96,8 +96,8 @@ def test_a_named_python_without_aider_is_reported_not_replaced(env, repo, tmp_pa
     start, outs = _session(e, repo, "s1", ["Fix `x_y`"])
     assert _ctx_text(start) == "" and _ctx_text(outs[0]) == ""     # nothing breaks
     from tokeneconomizer.plugin.context import LiveContext
-    from tokeneconomizer.plugin.hosts import HOSTS
-    st = repomap.read_state(LiveContext.build(HOSTS["omp"](), repo, e))
+    from tokeneconomizer.plugin.hosts import Omp
+    st = repomap.read_state(LiveContext.build(Omp(), repo, e))
     assert "cannot import aider" in st["error"] and not st.get("map")
 
 

@@ -53,8 +53,7 @@ class LiveController:
             # to tell which repository the session belongs to, when its log does not say.
             s = {"session_id": self.sid, "host": self.host.name, "started": time.time(),
                  "cwd": self.host.cwd(self.p, self.ctx.env), "turns": [], "nudges": 0,
-                 "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0,
-                 **self.host.session_state(self.ctx.env)}
+                 "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0}
         return s
 
     def _save(self, s):
@@ -110,12 +109,12 @@ class LiveController:
             # where the agent replays it; a cleared or compacted one has lost it. ("new" is
             # Copilot's word for "startup".)
             fresh = source in ("startup", "new", "clear", "compact")
-            if not fresh and not self.host.keeps_start_context:
+            if not fresh:
                 # The agent rebuilt the conversation without what its first start added: the
                 # same text again puts it back as it was (and as its prompt cache has it), so a
                 # session that started without facts gets none either.
                 text = s.get("injected_text", text if s.get("injected_chars") else "")
-            if text and (fresh or not self.host.keeps_start_context):
+            if text:
                 n_facts = sum(1 for ln in text.splitlines() if ln.startswith("- "))
                 self._log("inject", chars=len(text), facts=n_facts, source=source)
                 if not self.cfg.shadow:
@@ -156,11 +155,10 @@ class LiveController:
         if self.cfg.repomap != "off":
             if repomap.stale(self.ctx):
                 repomap.spawn_refresh(self.ctx)
-            at_start = self.cfg.repomap == "start" or not self.host.prompt_context
+            at_start = self.cfg.repomap == "start"
             if at_start and source in ("startup", "new", "clear", "compact"):
                 outputs.extend(self._inject_map(s, seen, repomap.cached_block(self.ctx),
                                                 "SessionStart", "cached"))
-                s["repomap_done"] = True
 
         if seen != seen_before:
             self.store.write("notices.json", seen)
@@ -253,12 +251,11 @@ class LiveController:
         return summary
 
     def user_prompt(self):
-        if self.cfg.loopguard == "off" and not (self.cfg.repomap == "on"
-                                             and self.host.prompt_context):
+        if self.cfg.loopguard == "off" and self.cfg.repomap != "on":
             return {}
         s = self._session()
         outputs = []
-        if self.cfg.repomap == "on" and self.host.prompt_context and not s.get("repomap_done"):
+        if self.cfg.repomap == "on" and not s.get("repomap_done"):
             # Once per session, on its first prompt: a map ranked toward what the prompt names.
             s["repomap_done"] = True
             seen = self.store.read("notices.json") or {}
@@ -278,7 +275,7 @@ class LiveController:
         if self.cfg.loopguard == "off" or self.p.get("stop_hook_active"):
             return {}
         s = self._session()
-        summary = self._close_turn(s, stopped_normally=self.host.stopped_normally(self.p))
+        summary = self._close_turn(s, stopped_normally=True)
         if summary:
             self._log("turn", **summary)
         self._save(s)
@@ -302,7 +299,7 @@ class LiveController:
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 
     def post_tool(self):
-        if self.cfg.loopguard == "off" or self.host.is_subagent(self.p):
+        if self.cfg.loopguard == "off":
             return {}
         event = self.p.get("hook_event_name") or "PostToolUse"
         s = self._session()
@@ -360,10 +357,6 @@ class LiveController:
                     text = (f"TokenEconomizer: this turn still looks stuck after a redirect "
                             f"({short}, {g.cum_turns} tool calls). {self.host.stop_hint(headless)}")
                     out = self.host.notice(text)
-                    if self.host.relays_notices:
-                        # Where the agent keeps hook messages out of the person's view, the
-                        # model passes the notice on in its reply, which they do see.
-                        out = merge_outputs(out, self.host.context(event, self.host.relay(text)))
         s["turn"] = g.to_dict()
         self._save(s)
         return out
@@ -377,7 +370,7 @@ class LiveController:
                 tp and os.path.exists(tp)):
             return {}
         s = self._session()
-        self._close_turn(s, stopped_normally=self.host.completed_at_end(self.p))
+        self._close_turn(s, stopped_normally=False)
         s["ended"] = time.time()
         s["end_reason"] = self.p.get("reason")
         self._save(s)

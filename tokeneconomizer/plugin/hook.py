@@ -22,19 +22,18 @@ def _truthy(v):
 
 def run(payload, env, host_hint=None):
     """Handle one hook payload; returns the output dict (no I/O, so tests call it directly)."""
-    from . import hosts
     from .context import LiveContext
     from .controller import LiveController
-    host = hosts.detect(payload, env, hint=host_hint)
-    if hasattr(host, "prepare"):
-        payload = host.prepare(payload, env)
+    from .hosts import Omp
+    host = Omp()
+    payload = host.prepare(payload, env)
     ctx = LiveContext.build(host, host.cwd(payload, env), env,
                             session_id=host.session_id(payload) or None, settle=False)
     if not ctx.config.enabled:
         return {}
     out = LiveController(ctx, payload).handle()
     # The omp answer has its own shape: the extension applies `omp.denyTools` at session start.
-    return host.render(payload, out, ctx) if hasattr(host, "render") else out
+    return host.render(payload, out, ctx)
 
 
 def _record_error(env):

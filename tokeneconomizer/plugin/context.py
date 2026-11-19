@@ -12,7 +12,7 @@ from .store import Store
 
 @dataclass
 class LiveContext:
-    host: object            # hosts.Host
+    host: object            # hosts.Omp
     repo: RepoId
     root: str               # the state root
     store: Store            # this host's state for this repository
