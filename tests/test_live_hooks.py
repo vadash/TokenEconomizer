@@ -686,6 +686,33 @@ def test_tooling_stage_fold_session_folds_one_session_into_the_next_doc(tmp_path
     assert outcome == {"proposal": [], "pending": False, "restored": []}
 
 
+def test_prefix_stage_fold_session_folds_one_session_into_the_next_doc(tmp_path):
+    """`PrefixStage.fold_session` takes the prior injection.json doc and one session, and
+    returns the next doc plus the outcome -- one session forms nothing yet."""
+    from tokeneconomizer.config import InjectionConfig
+    from tokeneconomizer.microskills import PrefixStage
+    from fixtures import write_omp_session
+
+    stage = PrefixStage(InjectionConfig(enabled=True, profile="envfacts"),
+                        "acme/widget", str(tmp_path), fresh=True, runner=None,
+                        agent="omp")
+    run = tmp_path / "run"
+    run.mkdir()
+    write_omp_session(str(run / "transcript.jsonl"), [
+        {"type": "command_execution", "command": '/bin/bash -lc "pytest -q"',
+         "aggregated_output": "bash: pytest: command not found", "exit_code": 127},
+        {"type": "command_execution", "command": '/bin/bash -lc "python -m pytest -q"',
+         "aggregated_output": "1 passed in 0.1s", "exit_code": 0},
+    ])
+    next_doc, outcome = stage.fold_session(
+        None, str(run), "s1", {"sessions": 5, "imported_sessions": 2},
+        injected_ids=None)
+    assert next_doc["profile"] == "envfacts" and next_doc["reason"] == "envfacts"
+    assert next_doc["sessions"] == 6 and next_doc["imported_sessions"] == 2
+    assert next_doc["rendered"] == "" and next_doc["rendered_ids"] == []
+    assert outcome == {"optimizer_tokens": 0.0, "rendered_chars": 0}
+
+
 def _pending_repo(env, repo, tmp_path, quiet="60"):
     """Five sessions that leave three tools unused, under the default wait before writing."""
     env = dict(env, TE_TOOLPRUNE_QUIET_MINUTES=quiet)

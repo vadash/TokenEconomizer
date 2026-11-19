@@ -367,11 +367,11 @@ def test_prefix_stage_envfacts_profile_needs_no_runner_and_reports_zero(tmp_path
     write_omp_session(os.path.join(rd, "transcript.jsonl"), [
         _cmd("python -m pytest -q", f"{BASE}: No module named pytest", 1),
         _cmd(f"{PROJ} -m pytest -q", "1 passed", 0)])
-    srow = {"resolved": True}
-    opt, reason = stage.after_task({"instance_id": "w-1"}, {}, rd, srow)
-    assert opt == 0 and reason == "envfacts"
-    assert srow["manual_facts"]["_profile"] == "envfacts"
-    assert "form_repair:run_tests:python -m pytest" in srow["manual_facts"]
+    next_doc, outcome = stage.fold_session(None, rd, "w-1", {})
+    assert outcome == {"optimizer_tokens": 0.0, "rendered_chars": 0}
+    assert next_doc["reason"] == "envfacts"
+    assert next_doc["facts"]["_profile"] == "envfacts"
+    assert "form_repair:run_tests:python -m pytest" in next_doc["facts"]
 
 
 # ---- rtk puts `rtk` in front of every command the agent types ----------------

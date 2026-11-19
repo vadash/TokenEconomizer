@@ -84,20 +84,11 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
         runner = sidecall.runner_for(ctx.host.name, ctx.config)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
-    srow = {"resolved": None}
-    task = {"instance_id": session_id}
-    if injected is not None:
-        task["injected_ids"] = injected
-    opt_tokens, reason = stage.after_task(task, {}, run_dir, srow)
-    rendered = stage.render() or ""
     prior = ctx.store.read("injection.json") or {}
-    ctx.store.write("injection.json", {
-        "profile": profile, "reason": reason, "rendered": rendered,
-        "rendered_ids": stage.injected_ids(),
-        "facts": srow.get("manual_facts"), "updated": time.time(),
-        "sessions": int(prior.get("sessions", 0)) + 1,
-        "imported_sessions": int(prior.get("imported_sessions", 0))})
-    return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
+    doc, outcome = stage.fold_session(adapter, run_dir, session_id, prior,
+                                      injected_ids=injected)
+    ctx.store.write("injection.json", doc)
+    return outcome
 
 
 class Busy(RuntimeError):
@@ -125,14 +116,7 @@ def forget_microskills(ctx, ids, undo=False):
             return out
         stage = PrefixStage(_microskills_config(ctx, profile), ctx.repo.label, ctx.mech_dir,
                             False, adapter=adapter, agent=ctx.host.name)
-        rendered = stage.render() or ""
-        facts = dict(stage.distiller.debug_row()) if stage.distiller else {}
-        # What only a fold knows (the last session's verdicts) stays as the fold left it.
-        facts.update({k: v for k, v in (prior.get("facts") or {}).items()
-                      if k.startswith("_") and k not in facts})
-        ctx.store.write("injection.json", dict(
-            prior, rendered=rendered, rendered_ids=stage.injected_ids(), facts=facts,
-            updated=time.time()))
+        ctx.store.write("injection.json", stage.rerender_after_forget(prior))
     return out
 
 

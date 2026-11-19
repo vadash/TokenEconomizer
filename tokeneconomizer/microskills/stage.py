@@ -6,6 +6,7 @@ handed to the proposer as already stated) -- renders its block for the next sess
 each finished session back in, reporting the paid proposer's cost for that session.
 """
 import os
+import time
 
 from ..names import repo_filename
 from ..stage import Stage
@@ -75,6 +76,7 @@ class PrefixStage(Stage):
         if pe > 0:
             _distiller.PROPOSE_EVERY = pe
         profile = getattr(cfg, "profile", "distiller") or "distiller"
+        self.profile = profile
         # The environment-fact layer reads intents through a domain vocabulary; the adapter
         # supplies it when it has one (SWE-bench: Python/git; Web-Bench: Node/npm).
         vocab = adapter.env_vocabulary() if hasattr(adapter, "env_vocabulary") else None
@@ -131,6 +133,46 @@ class PrefixStage(Stage):
         opt_tokens = self.distiller.opt_tokens - before
         srow["manual_facts"] = self.distiller.debug_row()
         return opt_tokens, self.reason
+
+    # -- folding: one finished session into the next doc --
+    def fold_session(self, adapter, run_dir, session_id, prior, *, injected_ids=None):
+        """Fold one finished session into the next doc.
+
+        The caller owns the store: it passes the prior doc and writes the next one back.
+        Returns the next doc (the injection.json shape, with the profile, the reason, the
+        rendered block and its ids, the facts, and the session counts) and the outcome
+        (this session's paid proposer tokens and the block size in characters).
+        """
+        if adapter is not None:
+            self.adapter = adapter
+        srow = {"resolved": None}
+        task = {"instance_id": session_id}
+        if injected_ids is not None:
+            task["injected_ids"] = injected_ids
+        opt_tokens, reason = self.after_task(task, {}, run_dir, srow)
+        rendered = self.render() or ""
+        doc = {
+            "profile": self.profile, "reason": reason, "rendered": rendered,
+            "rendered_ids": self.injected_ids(),
+            "facts": srow.get("manual_facts"), "updated": time.time(),
+            "sessions": int(prior.get("sessions", 0)) + 1,
+            "imported_sessions": int(prior.get("imported_sessions", 0))}
+        return doc, {"optimizer_tokens": float(opt_tokens or 0),
+                     "rendered_chars": len(rendered)}
+
+    def rerender_after_forget(self, prior):
+        """Render the block again after `forget_facts` changed the saved layers.
+
+        The caller owns the store: it forgot the facts first and writes the returned doc
+        back. What only a fold knows (the last session's verdicts) stays as the fold left
+        it. Returns the prior doc with a fresh block, its ids, the facts, and the time.
+        """
+        rendered = self.render() or ""
+        facts = dict(self.distiller.debug_row()) if self.distiller else {}
+        facts.update({k: v for k, v in (prior.get("facts") or {}).items()
+                      if k.startswith("_") and k not in facts})
+        return dict(prior, rendered=rendered, rendered_ids=self.injected_ids(),
+                    facts=facts, updated=time.time())
 
 
 # ---- forgetting a fact by hand ---------------------------------------------

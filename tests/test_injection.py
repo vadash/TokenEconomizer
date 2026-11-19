@@ -64,10 +64,10 @@ def test_prefix_stage_after_task_reports_tokens(tmp_path):
     rd = str(tmp_path / "run"); os.makedirs(rd)
     write_omp_session(os.path.join(rd, "transcript.jsonl"),
                             [("bash", {"command": "pytest"}, "ok")])
-    srow = {"resolved": True}
-    opt, reason = stage.after_task({"instance_id": "w-1"}, {}, rd, srow)
-    assert reason == "manual-distill"
-    assert "manual_facts" in srow
+    next_doc, outcome = stage.fold_session(None, rd, "w-1", {})
+    assert next_doc["reason"] == "manual-distill"
+    assert next_doc["facts"]
+    assert set(outcome) == {"optimizer_tokens", "rendered_chars"}
 
 
 def test_microskills_progress_counts_only_sessions_folded_while_it_was_on(
