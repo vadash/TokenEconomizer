@@ -24,6 +24,10 @@ HOME_ENV = "TOKENECONOMIZER_HOME"
 # Names the repository of a session whose directory holds no git metadata, by its remote URL.
 REPO_ENV = "TOKENECONOMIZER_REPO"
 
+def truthy(v):
+    """Whether an on/off gate value reads as on: 1, true, yes or on."""
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def state_root(env=None):
     """Absolute path of the live-state root."""

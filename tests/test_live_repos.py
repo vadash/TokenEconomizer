@@ -255,6 +255,25 @@ def test_an_old_remote_carries_its_learned_state_under_the_new_name(tmp_path, en
     assert json.load(open(path))["repo"] == "microsoft/te"
     assert not repos.needs_migration(root)
 
+def test_start_migration_runs_inline_when_fold_sync_is_true(tmp_path, env, monkeypatch):
+    """TE_FOLD_SYNC=true migrates inline like "1" does, instead of spawning a background job."""
+    from tokeneconomizer.plugin import hosts
+    from tokeneconomizer.plugin.context import LiveContext
+    clone = git_repo(str(tmp_path / "widget"), "https://github.com/acme/widget")
+    old = repos.legacy_key(clone, env)
+    st = state(env, old)
+    legacy_session(st, "s1", transcript(tmp_path / "s1.jsonl", clone))
+    root = env["TOKENECONOMIZER_HOME"]
+    assert repos.needs_migration(root)
+    ctx = LiveContext.build(hosts.Omp(), clone, dict(env, TE_FOLD_SYNC="true"), settle=False)
+    monkeypatch.setattr(LiveContext, "spawn",
+                        lambda self, argv, log: (_ for _ in ()).throw(
+                            AssertionError("migration must run inline")))
+    assert repos.start_migration(ctx) is True
+    assert not repos.needs_migration(root)
+    new = state(env, paths.repo_identity(clone, env).key)
+    assert "s1" in (new.read("folded.json") or {})
+
 
 def test_sessions_of_other_directories_leave_the_home_directory(tmp_path, env):
     """The home directory's state keeps the sessions started in ~; one started in a project

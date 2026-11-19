@@ -16,10 +16,6 @@ import time
 import traceback
 
 
-def _truthy(v):
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-
 def run(payload, env, host_hint=None):
     """Handle one hook payload; returns the output dict (no I/O, so tests call it directly)."""
     from . import turnsession
@@ -64,7 +60,8 @@ def main(argv=None, stdin=None, stdout=None, env=None):
         # locale's code page on Windows and garble a non-ASCII path.
         buf = getattr(stdin, "buffer", None)
         raw = buf.read().decode("utf-8") if buf is not None else stdin.read()
-        if not (_truthy(env.get("TE_SIDECALL")) or _truthy(env.get("TE_DISABLE"))):
+        from .paths import truthy
+        if not (truthy(env.get("TE_SIDECALL")) or truthy(env.get("TE_DISABLE"))):
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
                 if event:

@@ -65,6 +65,7 @@ import json
 import math
 import os
 from dataclasses import asdict, dataclass, field, fields
+from .paths import truthy
 
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 TOOLPRUNE = ("off", "propose", "auto")
@@ -180,8 +181,7 @@ class LiveConfig:
                 if not 0.0 <= v <= 1.0:
                     raise ValueError("must be between 0 and 1")
             elif isinstance(cur, bool):
-                v = value if isinstance(value, bool) else str(value).strip().lower() in (
-                    "1", "true", "yes", "on")
+                v = value if isinstance(value, bool) else truthy(value)
             elif isinstance(cur, int):
                 if isinstance(value, bool):
                     raise ValueError("not a number")
@@ -277,7 +277,7 @@ def load_config(root, repo_dir=None, env=None):
                 cfg.set("loopguard_thresholds", json.loads(env[var]), source=var)
             except ValueError:
                 cfg.warnings.append(f"{var}: not valid JSON")
-    if str(env.get("TE_DISABLE", "")).strip().lower() in ("1", "true", "yes", "on"):
+    if truthy(env.get("TE_DISABLE")):
         cfg.enabled = False
     if cfg.loopguard == "stop":
         cfg.warnings.append("loopguard=stop acts as nudge: the plugin no longer stops a turn; a "

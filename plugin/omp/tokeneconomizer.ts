@@ -57,7 +57,7 @@ const SUBCOMMANDS = [
   "doctor",
 ];
 
-const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
+export const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 
 /** The program and arguments that run a launcher. On Windows the `.cmd` launchers run the
  * bootstrap with Python itself (`TE_PYTHON`, else `python`); elsewhere the script runs

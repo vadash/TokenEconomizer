@@ -34,7 +34,7 @@ import traceback
 from ..names import repo_filename
 from . import hosts as hosts_mod
 from .paths import (BY_PATH, BY_REMOTE, RepoId, _slug, digest, home_dir, is_git_entry,
-                    normalize_remote, origin_url, repo_identity, state_root)
+                    normalize_remote, origin_url, repo_identity, state_root, truthy)
 from .store import Store
 
 INDEX = "index.json"
@@ -701,12 +701,12 @@ def needs_migration(root):
 
 
 def start_migration(ctx):
-    """Once after an upgrade: migrate every state directory, in the background (inline under
-    `TE_FOLD_SYNC=1`, for tests). A marker keeps concurrent session starts from piling up."""
+    """Once after an upgrade: migrate every state directory, in the background (inline when
+    `TE_FOLD_SYNC` reads as on, for tests). A marker keeps concurrent session starts from piling up."""
     root = ctx.root
     if not needs_migration(root):
         return False
-    if ctx.env.get("TE_FOLD_SYNC") == "1":
+    if truthy(ctx.env.get("TE_FOLD_SYNC")):
         run_migration(root, ctx.env)
         return True
     marker = os.path.join(root, ".migrating")

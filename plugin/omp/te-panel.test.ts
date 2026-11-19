@@ -182,3 +182,13 @@ describe("/te panel", () => {
     expect(panel).toContain(join("repos", "panelrepo-0123456789", "config.json"));
   });
 });
+
+describe("truthy", () => {
+  test("one helper reads the four words", async () => {
+    const mod = (await import("./tokeneconomizer.ts")) as {
+      truthy: (v: string | undefined) => boolean;
+    };
+    for (const v of ["1", "True", " YES ", "on"]) expect(mod.truthy(v)).toBe(true);
+    for (const v of ["0", "false", "", undefined]) expect(mod.truthy(v)).toBe(false);
+  });
+});
