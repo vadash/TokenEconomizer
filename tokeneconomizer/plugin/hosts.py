@@ -176,7 +176,7 @@ class Omp:
         from . import denylist
         if (payload or {}).get("hook_event_name") == "SessionStart" and not ctx.config.shadow:
             out["omp"] = {"denyTools": sorted(
-                denylist.applied_for(ctx.store, ctx.repo.root, "omp"))}
+                denylist.applied_for(ctx.store))}
         return out
 
     # -- the finished session, in the shapes the mechanisms read --------------------------

@@ -168,23 +168,22 @@ def test_a_session_start_catalog_is_merged_into_the_omp_state(env, repo):
 
 def test_a_session_start_answer_names_the_tools_to_remove(env, repo):
     ctx = LiveContext.build(Omp(), repo, env)
-    denylist.apply(repo, ["lsp", "debug"], ctx.store, host="omp")
+    denylist.apply(ctx.store, ["lsp", "debug"])
     assert _start(env, repo)["omp"] == {"denyTools": ["debug", "lsp"]}
     assert "omp" not in _start(dict(env, TE_SHADOW="1"), repo, sid="omp-2")
 
 
 def test_the_omp_deny_list_is_plugin_state_and_never_a_settings_file(tmp_path):
     st = Store(str(tmp_path / "st"))
-    assert denylist.supports("omp")
-    assert denylist.apply(tmp_path, ["lsp", "debug"], st, host="omp") == ["debug", "lsp"]
-    assert denylist.applied_for(st, tmp_path, "omp") == ["debug", "lsp"]
-    assert denylist.apply(tmp_path, ["lsp", "debug"], st, host="omp") == []
-    assert denylist.restore(tmp_path, st, ["lsp"], host="omp") == ["lsp"]
-    assert denylist.applied_for(st, tmp_path, "omp") == ["debug"]
-    denylist.set_kept(st, tmp_path, "omp", add=["debug"])
-    assert denylist.kept_for(st, tmp_path, "omp") == ["debug"]
-    denylist.set_kept(st, tmp_path, "omp", remove=["debug"])
-    assert denylist.kept_for(st, tmp_path, "omp") == []
+    assert denylist.apply(st, ["lsp", "debug"]) == ["debug", "lsp"]
+    assert denylist.applied_for(st) == ["debug", "lsp"]
+    assert denylist.apply(st, ["lsp", "debug"]) == []
+    assert denylist.restore(st, ["lsp"]) == ["lsp"]
+    assert denylist.applied_for(st) == ["debug"]
+    denylist.set_kept(st, add=["debug"])
+    assert denylist.kept_for(st) == ["debug"]
+    denylist.set_kept(st, remove=["debug"])
+    assert denylist.kept_for(st) == []
     assert not list(tmp_path.rglob("settings.local.json"))
     assert list(tmp_path.iterdir()) == [tmp_path / "st"]     # only the plugin's own state
 
@@ -208,7 +207,7 @@ def test_toolprune_apply_and_restore_for_omp_say_where_they_take_effect(
     assert "not measured: omp pruning is applied by its extension" in capsys.readouterr().out
     assert cli.main(["--host", "omp", "--cwd", str(r), "toolprune", "restore"]) == 0
     ctx = LiveContext.build(Omp(), str(r))
-    assert denylist.applied_for(ctx.store, str(r), "omp") == []
+    assert denylist.applied_for(ctx.store) == []
 
 
 def test_toolprune_show_names_every_section_and_its_verbs_when_nothing_is_recorded(

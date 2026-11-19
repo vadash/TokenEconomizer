@@ -18,16 +18,6 @@ import time
 
 # omp's applied list is recorded under this state key: it has no settings path.
 OMP_LIST = "omp:session"
-_UNITS = {"omp": "tool"}
-
-
-def supports(host):
-    return host == "omp"
-
-
-def unit(host, plural=False):
-    u = _UNITS.get(host, "tool")
-    return (u[:-1] + "ies" if u.endswith("y") else u + "s") if plural else u
 
 
 def write_json(path, obj):
@@ -46,10 +36,6 @@ APPLIED = "untool_applied.json"
 
 def _canon(path):
     return path if path == OMP_LIST else (os.path.realpath(path) if path else "")
-
-
-def _list_key(repo_root, host):
-    return OMP_LIST if host == "omp" else _canon(repo_root)
 
 
 def applied_by_path(doc):
@@ -76,17 +62,16 @@ def write_applied(store, by_path, kept=None):
                           "updated": time.time()})
 
 
-def kept_for(store, repo_root, host="omp"):
+def kept_for(store):
     """What the person gave back, which `auto` must leave alone."""
-    return list(kept_by_path(store.read(APPLIED) or {}).get(_list_key(repo_root, host)) or [])
+    return list(kept_by_path(store.read(APPLIED) or {}).get(OMP_LIST) or [])
 
 
-def set_kept(store, repo_root, host, add=(), remove=()):
+def set_kept(store, add=(), remove=()):
     """Mark entries as given back by the person (`restore`), or no longer (`apply` by name)."""
     doc = store.read(APPLIED) or {}
     kept = kept_by_path(doc)
-    path = _list_key(repo_root, host)
-    kept[path] = sorted((set(kept.get(path) or []) | set(add)) - set(remove))
+    kept[OMP_LIST] = sorted((set(kept.get(OMP_LIST) or []) | set(add)) - set(remove))
     write_applied(store, applied_by_path(doc), kept)
 
 
@@ -98,9 +83,9 @@ def applied(store, path=None):
     return list(by.get(_canon(path)) or by.get("") or [])
 
 
-def applied_for(store, repo_root, host="omp"):
+def applied_for(store):
     """What the plugin added for this checkout: the list omp answers each session with."""
-    return applied(store, _list_key(repo_root, host))
+    return applied(store, OMP_LIST)
 
 
 def _record(store, items, path):
@@ -110,8 +95,8 @@ def _record(store, items, path):
     write_applied(store, by)
 
 
-# ---- omp: a list in the plugin's own state, applied by its extension at session start -------
-def _apply(tools, store):
+def apply(store, tools):
+    """Record `tools` as applied. Returns those newly added."""
     mine = set(applied(store, OMP_LIST))
     added = sorted(set(tools) - mine)
     if added:
@@ -119,24 +104,11 @@ def _apply(tools, store):
     return added
 
 
-def _restore(store, tools):
+def restore(store, tools=None):
+    """Remove entries this plugin added (all of them, or just `tools`). Returns removed."""
     mine = set(applied(store, OMP_LIST))
     target = mine if not tools else mine & set(tools)
     if not target:
         return []
     _record(store, mine - target, OMP_LIST)
     return sorted(target)
-
-
-def apply(repo_root, tools, store, host="omp"):
-    """Record `tools` as applied. Returns those newly added."""
-    if host != "omp":
-        raise ValueError(f"no deny list for {host}")
-    return _apply(tools, store)
-
-
-def restore(repo_root, store, tools=None, host="omp"):
-    """Remove entries this plugin added (all of them, or just `tools`). Returns removed."""
-    if host != "omp":
-        raise ValueError(f"no deny list for {host}")
-    return _restore(store, tools)

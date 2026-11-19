@@ -159,9 +159,7 @@ def _status_explanations(ctx, inj, unt, tracker, applied):
                 why = "no facts tracked in the last learning snapshot"
         notes["microskills"] = f"{why}; {facts_detail}"
 
-    if not denylist.supports(host):
-        notes["toolprune"] = f"tool pruning is not available on {host}"
-    elif cfg.toolprune == "off":
+    if cfg.toolprune == "off":
         notes["toolprune"] = "off; previously applied rules are not restored automatically"
     else:
         proposal = _proposal(ctx, unt)
@@ -229,8 +227,7 @@ def cmd_status(args):
                       "imported_prompts": int(unt.get("imported_prompts", 0) or 0),
                       "catalog_source": unt.get("catalog_source"),
                       "proposal": unt.get("proposal", []),
-                      "applied": denylist.applied_for(ctx.store, ctx.repo.root,
-                                                      ctx.host.name)},
+                      "applied": denylist.applied_for(ctx.store)},
         "loopguard": {"mode": cfg.loopguard, "envelope": env_tracker.envelope,
                       "ended_green_turns": len(env_tracker.resolved_turns)},
         "history": history.summary(ctx),
@@ -272,16 +269,13 @@ def cmd_status(args):
           + (f", +{i['imported_sessions']} from earlier history" if i["imported_sessions"]
              else "") + ")")
     u = out["toolprune"]
-    if not denylist.supports(ctx.host.name):
-        print("  toolprune    not available on this host")
-    else:
-        src = u["catalog_source"] or "none yet"
-        print(f"  toolprune    {u['sessions']} sessions ({u['prompts']} prompts) observed"
-              + (f" (+{u['imported_sessions']} from earlier history, {u['imported_prompts']} "
-                 f"prompts)" if u["imported_sessions"] else "")
-              + f", catalog: {src}; "
-              f"proposed {denylist.unit(ctx.host.name, plural=True)}: "
-              f"{', '.join(u['proposal']) or '-'}; applied: {', '.join(u['applied']) or '-'}")
+    src = u["catalog_source"] or "none yet"
+    print(f"  toolprune    {u['sessions']} sessions ({u['prompts']} prompts) observed"
+          + (f" (+{u['imported_sessions']} from earlier history, {u['imported_prompts']} "
+             f"prompts)" if u["imported_sessions"] else "")
+          + f", catalog: {src}; "
+          f"proposed tools: "
+          f"{', '.join(u['proposal']) or '-'}; applied: {', '.join(u['applied']) or '-'}")
     sp = out["loopguard"]
     env_s = f"{sp['envelope']:.0f} tool calls" if sp["envelope"] else "not learned yet"
     print(f"  loopguard    envelope {env_s} ({sp['ended_green_turns']} ended-green turns); "
@@ -417,9 +411,9 @@ def _wrap(line, indent=""):
 
 def _toolprune_show(ctx, unt):
     host = ctx.host.name
-    applied = denylist.applied_for(ctx.store, ctx.repo.root, host)
+    applied = denylist.applied_for(ctx.store)
     proposal = _proposal(ctx, unt)
-    kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
+    kept = denylist.kept_for(ctx.store)
     waiting = [t for t in unt.get("needs_apply") or [] if t in proposal]
     held = unt.get("auto_pending")
     pending = [t for t in (held.get("items") if isinstance(held, dict) else None) or []
@@ -504,17 +498,13 @@ def _wait_and_apply(args):
 def _proposal(ctx, unt):
     """The proposal, less what this checkout already applied or gave back: the clones of one
     repository share its evidence, and one of them may have applied the list before another."""
-    mine = set(denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name))
-    mine |= set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))
+    mine = set(denylist.applied_for(ctx.store))
+    mine |= set(denylist.kept_for(ctx.store))
     return fold.unprotected(ctx, [t for t in unt.get("proposal", []) if t not in mine])
 
 
 def cmd_toolprune(args):
     ctx = _ctx(args)
-    host = ctx.host.name
-    if not denylist.supports(host):
-        print(f"tool pruning is not available on {host} (it declares only a handful of tools)")
-        return 1
     unt = ctx.store.read("untool.json") or {}
     action = args.action
     if action == "show":
@@ -527,25 +517,25 @@ def cmd_toolprune(args):
             print("nothing to apply")
             return 0
         try:
-            added = denylist.apply(ctx.repo.root, tools, ctx.store, host=host)
+            added = denylist.apply(ctx.store, tools)
         except RuntimeError as e:
             print(f"not applied: {e}")
             return 1
         # Named by the person: no longer one they gave back, whatever `restore` said before.
-        denylist.set_kept(ctx.store, ctx.repo.root, host, remove=tools)
+        denylist.set_kept(ctx.store, remove=tools)
         print(f"added: {', '.join(added) or '(already present)'}\n"
               "the omp session tool list (applied by the extension at session start) -- "
               "takes effect from the next omp session.")
         return 0
     if action == "restore":
         try:
-            removed = denylist.restore(ctx.repo.root, ctx.store, args.tools or None, host=host)
+            removed = denylist.restore(ctx.store, args.tools or None)
         except RuntimeError as e:
             print(f"not restored: {e}")
             return 1
         # Given back by the person: `toolprune: auto` must not take them away again at the next
         # fold, and a proposal does not ask for them again.
-        denylist.set_kept(ctx.store, ctx.repo.root, host, add=removed)
+        denylist.set_kept(ctx.store, add=removed)
         print(f"removed: {', '.join(removed) or '-'} (from the next session)"
               + (f"; kept from now on (`toolprune apply {removed[0]}` removes one again)"
                  if removed else ""))

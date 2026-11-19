@@ -411,12 +411,12 @@ def test_a_deny_list_applied_in_one_clone_is_absent_in_another(tmp_path):
     a = git_repo(str(tmp_path / "a"), "https://github.com/o/r")
     b = git_repo(str(tmp_path / "b"), "https://github.com/o/r")
     st_a, st_b = Store(str(tmp_path / "a-st")), Store(str(tmp_path / "b-st"))
-    assert denylist.apply(a, ["CronCreate"], st_a) == ["CronCreate"]
-    assert denylist.applied_for(st_a, a) == ["CronCreate"]
-    assert denylist.applied_for(st_b, b) == []
-    assert denylist.restore(b, st_b) == []                # nothing of b's to take back
-    assert denylist.applied_for(st_a, a) == ["CronCreate"]
-    assert denylist.apply(b, ["CronCreate", "Monitor"], st_b) == ["CronCreate", "Monitor"]
+    assert denylist.apply(st_a, ["CronCreate"]) == ["CronCreate"]
+    assert denylist.applied_for(st_a) == ["CronCreate"]
+    assert denylist.applied_for(st_b) == []
+    assert denylist.restore(st_b) == []                # nothing of b's to take back
+    assert denylist.applied_for(st_a) == ["CronCreate"]
+    assert denylist.apply(st_b, ["CronCreate", "Monitor"]) == ["CronCreate", "Monitor"]
     assert denylist.applied(st_a) == ["CronCreate"]
     assert denylist.applied(st_b) == ["CronCreate", "Monitor"]
 
@@ -427,11 +427,11 @@ def test_a_deny_list_record_from_0_1_0_is_still_read(tmp_path):
     st.write(denylist.APPLIED, {"tools": ["Monitor"], "path": "/gone/settings.json",
                                 "updated": 1})
     assert denylist.applied(st) == ["Monitor"]            # the old shape still parses
-    assert denylist.applied_for(st, a) == []              # omp answers only its own list
-    assert denylist.apply(a, ["Monitor"], st) == ["Monitor"]
-    assert denylist.applied_for(st, a) == ["Monitor"]
-    assert denylist.restore(a, st) == ["Monitor"]
-    assert denylist.applied_for(st, a) == []
+    assert denylist.applied_for(st) == []              # omp answers only its own list
+    assert denylist.apply(st, ["Monitor"]) == ["Monitor"]
+    assert denylist.applied_for(st) == ["Monitor"]
+    assert denylist.restore(st) == ["Monitor"]
+    assert denylist.applied_for(st) == []
 
 
 def test_pending_sessions_fold_oldest_first(tmp_path, env):

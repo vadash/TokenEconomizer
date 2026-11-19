@@ -52,8 +52,7 @@ def inject_session_start(call):
                         f"(review with `{call._cmd('microskills')}`)."))
                     seen["injection"] = digest
 
-    if (call.cfg.toolprune != "off" and denylist.supports(call.host.name)
-            and not call.cfg.shadow):
+    if call.cfg.toolprune != "off" and not call.cfg.shadow:
         outputs.extend(_toolprune_notices(call, seen))
 
     pause = sidecall.paused(call.host.name, call.ctx.root)
@@ -96,10 +95,9 @@ def _toolprune_notices(call, seen):
     checkout's sessions (from this one on), and a proposal still waiting -- under `propose`,
     or when `auto` could not write the settings file."""
     out = []
-    cmd, unit = call._cmd("toolprune"), denylist.unit(call.host.name)
+    cmd, unit = call._cmd("toolprune"), "tool"
     unt = call.store.read("untool.json") or {}
-    root = call.ctx.repo.root
-    mine = sorted(denylist.applied_for(call.store, root, call.host.name))
+    mine = sorted(denylist.applied_for(call.store))
 
     def few(items):
         return ", ".join(items[:4]) + ("..." if len(items) > 4 else "")
@@ -112,7 +110,7 @@ def _toolprune_notices(call, seen):
         seen["untool_applied"] = ",".join(mine)
     # What this checkout already applied, or gave back, is no news here (another clone may
     # not have).
-    kept = set(denylist.kept_for(call.store, root, call.host.name))
+    kept = set(denylist.kept_for(call.store))
     prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
     refused = unt.get("auto_apply_refused") if call.cfg.toolprune == "auto" else None
     # Under `auto`, a list waiting for the repository to go quiet is no news yet: the

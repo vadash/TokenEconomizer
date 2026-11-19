@@ -129,7 +129,7 @@ def test_restored_items_are_not_reported_as_waiting_to_be_applied(status):
     ctx, run = status
     ctx.store.write("untool.json", {"sessions": 6, "proposal": ["goals"],
                                   "auto_pending": {"items": ["goals"]}})
-    denylist.set_kept(ctx.store, ctx.repo.root, ctx.host.name, add=["goals"])
+    denylist.set_kept(ctx.store, add=["goals"])
     out = run("--explain")
     assert "awaiting" not in out and "held for the idle wait" not in out
     assert "no eligible proposal recorded" in out

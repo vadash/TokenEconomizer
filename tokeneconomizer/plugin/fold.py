@@ -126,7 +126,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
     applies from a later session, since a running session keeps the tools it started with.
     `prompts` is None where the log does not say, and the session counts as one prompt."""
-    if not denylist.supports(ctx.host.name) or ctx.config.toolprune == "off":
+    if ctx.config.toolprune == "off":
         return None
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
@@ -138,8 +138,8 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
                          host, "agent",
                          adapter=adapter, repo=ctx.repo.label, results_root=ctx.mech_dir,
                          fresh=True)
-    applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
-    kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
+    applied = denylist.applied_for(ctx.store)
+    kept = set(denylist.kept_for(ctx.store))   # given back
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
     # person wrote, and only in the direction of giving a tool back.
@@ -147,12 +147,12 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, prompts=None):
     restored = []
     if any(t in protected for t in applied) and not ctx.config.shadow:
         try:
-            restored = denylist.restore(ctx.repo.root, ctx.store,
-                                      [t for t in applied if t in protected], host=host)
+            restored = denylist.restore(ctx.store,
+                                      [t for t in applied if t in protected])
         except RuntimeError:            # an unreadable or redirected settings file: leave it
             restored = []
     if restored:
-        applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
+        applied = denylist.applied_for(ctx.store)
     # The stage warns once per STREAM when no catalog parses -- a harness defect signal there.
     # Here a stage lives for one fold, and a session that called no tool legitimately has no
     # observed catalog; the source (or its absence) is recorded in untool.json instead.
@@ -222,8 +222,8 @@ def apply_pending(ctx, now=None):
         if not pend:
             return None
         root = pend.get("root") or ctx.repo.root
-        done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
-        done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
+        done = set(denylist.applied_for(ctx.store))
+        done |= set(denylist.kept_for(ctx.store))
         items = unprotected(ctx, [t for t in pend.get("items") or [] if t not in done])
         if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
             idle = now - last_activity(ctx)
@@ -232,7 +232,7 @@ def apply_pending(ctx, now=None):
             if idle < quiet_s and waited < PENDING_MAX_S:
                 return min(quiet_s - idle, PENDING_MAX_S - waited)
             try:
-                unt["auto_applied"] = denylist.apply(root, items, ctx.store, host=ctx.host.name)
+                unt["auto_applied"] = denylist.apply(ctx.store, items)
                 unt["proposal"] = [t for t in unt.get("proposal") or [] if t not in items]
                 unt.pop("auto_apply_refused", None)
             except RuntimeError as e:      # an unreadable, committed or redirected file
@@ -318,7 +318,7 @@ def fold_locked(ctx, session_id, transcript_path=None):
             "turns": len(turns),
             "nudges": int(sess.get("nudges", 0)), "aborts": int(sess.get("aborts", 0)),
             "injected_chars": int(sess.get("injected_chars", 0)),
-            "untool_applied": denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name),
+            "untool_applied": denylist.applied_for(ctx.store),
             "overhead": {
                 "optimizer_tokens": ((record.get("injection") or {}).get("optimizer_tokens")
                                      or 0),

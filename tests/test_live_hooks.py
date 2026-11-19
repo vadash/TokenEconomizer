@@ -470,7 +470,7 @@ def _catalog(env, tools):
 
 
 def _deny(env, repo):
-    return sorted(denylist.applied_for(store_for(env, repo), repo))
+    return sorted(denylist.applied_for(store_for(env, repo)))
 
 
 def test_with_propose_unused_tools_are_proposed_but_nothing_changes_until_applied(
@@ -547,7 +547,7 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     assert "kept (gave back, never re-applied in auto): CronCreate" in out
     assert cli.main(["--host", "omp", "--cwd", repo, "toolprune", "apply", "Workflow"]) == 0
     assert _deny(env, repo) == ["Workflow"]
-    assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
+    assert denylist.kept_for(store_for(env, repo)) == ["CronCreate"]
 
 
 def test_a_tool_that_appears_after_a_deny_list_is_written_joins_the_catalog(
@@ -647,7 +647,7 @@ def test_a_protected_tool_is_never_left_out_and_a_rule_already_written_comes_bac
     tool was protected is given back at the next fold."""
     _catalog(env, ["bash", "mcp__headroom__headroom_retrieve", "Workflow"])
     st = store_for(env, repo)
-    denylist.apply(repo, ["mcp__headroom__headroom_retrieve", "Workflow"], st)
+    denylist.apply(st, ["mcp__headroom__headroom_retrieve", "Workflow"])
     for i in range(5):
         _prompts(env, repo, tmp_path, f"a{i}", 3)
     assert _deny(env, repo) == ["Workflow", "mcp__headroom__headroom_retrieve"]
@@ -796,7 +796,7 @@ def test_a_deny_list_that_waited_a_day_is_written_even_if_sessions_never_pause(
 
 def test_a_pending_deny_list_leaves_out_what_was_given_back_meanwhile(env, repo, tmp_path):
     env, ctx = _pending_repo(env, repo, tmp_path)
-    denylist.set_kept(ctx.store, repo, "omp", add=["Workflow"])        # `restore`d earlier
+    denylist.set_kept(ctx.store, add=["Workflow"])        # `restore`d earlier
     assert fold.apply_pending(ctx, now=time.time() + 3700) is None
     assert _deny(env, repo) == ["CronCreate", "ShareOnboardingGuide"]
 
@@ -892,7 +892,7 @@ def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(
     _catalog(env, ["bash", "read", "CronCreate", "WebFetch", "WebSearch"])
     st = store_for(env, repo)
     # A deny list accepted under an earlier version, which still proposed the web.
-    denylist.apply(repo, ["CronCreate", "WebFetch", "WebSearch"], st)
+    denylist.apply(st, ["CronCreate", "WebFetch", "WebSearch"])
     for i in range(20):                       # far past the old 3x evidence bar
         t = write_session(str(tmp_path / f"w{i}.jsonl"), [("look", [
             ("bash", {"command": "ls"}, "a.py", False)])])
@@ -904,11 +904,11 @@ def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(
 
 def test_apply_and_restore_touch_only_the_plugins_own_entries(repo, tmp_path):
     st = Store(str(tmp_path / "st"))
-    assert denylist.apply(repo, ["Workflow", "CronCreate"], st) == ["CronCreate", "Workflow"]
-    assert denylist.apply(repo, ["Workflow"], st) == []            # already present
-    assert denylist.restore(repo, st, ["CronCreate"]) == ["CronCreate"]
-    assert denylist.restore(repo, st) == ["Workflow"]
-    assert denylist.applied_for(st, repo) == []
+    assert denylist.apply(st, ["Workflow", "CronCreate"]) == ["CronCreate", "Workflow"]
+    assert denylist.apply(st, ["Workflow"]) == []            # already present
+    assert denylist.restore(st, ["CronCreate"]) == ["CronCreate"]
+    assert denylist.restore(st) == ["Workflow"]
+    assert denylist.applied_for(st) == []
 
 
 def test_restore_takes_back_an_entry_whichever_write_of_apply_failed(repo, tmp_path, monkeypatch):
@@ -922,9 +922,9 @@ def test_restore_takes_back_an_entry_whichever_write_of_apply_failed(repo, tmp_p
     with monkeypatch.context() as m:
         m.setattr(Store, "write", record_fails)
         with pytest.raises(PermissionError):
-            denylist.apply(repo, ["Workflow"], st)
-    denylist.restore(repo, st)
-    assert denylist.applied_for(st, repo) == []
+            denylist.apply(st, ["Workflow"])
+    denylist.restore(st)
+    assert denylist.applied_for(st) == []
 
 
 # ---- folding and the ledger ----------------------------------------------------------------
