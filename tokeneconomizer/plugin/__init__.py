@@ -9,7 +9,7 @@ fails open.
                     survives hook processes, sessions and plugin updates;
   * agents       -- `hosts`: hook payloads in, hook outputs out, for Claude Code, Codex, Copilot
                     CLI and Pi; `adapter`: the `DomainAdapter` for a real repository;
-  * at each hook -- `controller`: inject the learned facts at session start, guard each
+  * at each hook -- `turnsession`: inject the learned facts at session start, guard each
                     prompt-turn call by call, and hand a finished session to `fold`;
   * after a session -- `fold`: run `PrefixStage` and `ToolingStage` over the finished session,
                     off the agent's critical path; `denylist` writes an approved proposal into

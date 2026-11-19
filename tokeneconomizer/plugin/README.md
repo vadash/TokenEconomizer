@@ -5,12 +5,12 @@ only when the agent calls a hook, each call a fresh process, so what is learned 
 every handler returns fast and fails open.
 
 What happens at each hook, and how each agent was verified to behave, is in
-[`docs/PLUGIN.md`](../../docs/PLUGIN.md); `controller.py` implements it.
+[`docs/PLUGIN.md`](../../docs/PLUGIN.md); `turnsession.py` implements it.
 
 | Module | |
 |---|---|
 | `hook.py`, `cli.py` | entry points: the hook dispatcher and `te` |
-| `controller.py` | what happens at each hook |
+| `turnsession.py` | what happens at each hook |
 | `hosts.py` | per-agent hook payloads and outputs (Claude Code, Codex, Copilot CLI, Pi, opencode, Cursor, Hermes Agent) |
 | `fold.py` | a finished session through `PrefixStage` and `ToolingStage` |
 | `history.py` | `te history import`: a repository's Claude Code sessions from before the plugin, folded once, oldest first, to learn from |

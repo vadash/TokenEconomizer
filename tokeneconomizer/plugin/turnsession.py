@@ -11,6 +11,7 @@ Every applied event is saved once, and a hook that cannot apply anything answers
 the traceback goes to `<state root>/errors.log`, since a cost optimization must never break
 the agent's session. Unknown events and calls without a session id also answer `{}`.
 """
+import hashlib
 import itertools
 import json
 import os
@@ -18,7 +19,7 @@ import re
 import time
 import traceback
 from .. import loopguard
-from . import fold, repomap, sidecall
+from . import denylist, fold, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 from .store import Store
@@ -192,8 +193,122 @@ class _Call:
 
     # ---- SessionStart -----------------------------------------------------------------
     def session_start(self):
-        from .controller import inject_session_start
-        return inject_session_start(self)
+        return self.inject_session_start()
+
+    def inject_session_start(self):
+        """The SessionStart outputs for one call; the session document, saved once here."""
+        source = self.p.get("source") or "startup"
+        s = self._session()
+        s["source"] = source
+        s.setdefault("cwd", self.host.cwd(self.p, self.ctx.env))
+        outputs = []
+        seen = self.store.read("notices.json") or {}
+        seen_before = dict(seen)
+
+        if self.cfg.microskills != "off":
+            inj = self.store.read("injection.json") or {}
+            text = inj.get("rendered") or ""
+            # A resumed or forked conversation already carries what the first start injected,
+            # where the agent replays it; a cleared or compacted one has lost it. ("new" is
+            # Copilot's word for "startup".)
+            fresh = source in ("startup", "new", "clear", "compact")
+            if not fresh:
+                # The agent rebuilt the conversation without what its first start added: the
+                # same text again puts it back as it was (and as its prompt cache has it), so a
+                # session that started without facts gets none either.
+                text = s.get("injected_text", text if s.get("injected_chars") else "")
+            if text:
+                n_facts = sum(1 for ln in text.splitlines() if ln.startswith("- "))
+                self._log("inject", chars=len(text), facts=n_facts, source=source)
+                if not self.cfg.shadow:
+                    outputs.append(self.host.context("SessionStart", text))
+                    s["injected_chars"] = len(text)
+                    s["injected_text"] = text
+                    if "rendered_ids" in inj:     # which facts, for this session's fold
+                        s["injected_ids"] = list(inj["rendered_ids"])
+                    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
+                    if seen.get("injection") != digest:
+                        outputs.append(self.host.notice(
+                            f"TokenEconomizer: added {n_facts} learned fact(s) about "
+                            f"{self.ctx.repo.label} to this session's context "
+                            f"(review with `{self._cmd('microskills')}`)."))
+                        seen["injection"] = digest
+
+        if self.cfg.toolprune != "off" and not self.cfg.shadow:
+            outputs.extend(self._toolprune_notices(seen))
+
+        pause = sidecall.paused(self.host.name, self.ctx.root)
+        calls_a_model = "distiller" in self.cfg.microskills or self.cfg.loopguard != "off"
+        if (pause and calls_a_model and not self.cfg.shadow
+                and seen.get("sidecall_paused") != pause["at"]):
+            outputs.append(self.host.notice(
+                f"TokenEconomizer: the plugin's own model calls go through "
+                f"`{sidecall.call_name(self.host.name)}`, "
+                f"which answered that it is not signed in, so they are paused; facts that "
+                f"need no model call are still learned, and the loop guard redirects only at its "
+                f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "
+                f"again."))
+            seen["sidecall_paused"] = pause["at"]
+
+        note = repos.migration_notice(self.ctx.root, self._cmd("repos"))
+        if note and not self.cfg.shadow:
+            outputs.append(self.host.notice(note))
+
+        if self.cfg.repomap != "off":
+            if repomap.stale(self.ctx):
+                repomap.spawn_refresh(self.ctx)
+            at_start = self.cfg.repomap == "start"
+            if at_start and source in ("startup", "new", "clear", "compact"):
+                outputs.extend(self._inject_map(s, seen, repomap.cached_block(self.ctx),
+                                               "SessionStart", "cached"))
+
+        if seen != seen_before:
+            self.store.write("notices.json", seen)
+        self._save(s)
+        repos.note_repo(self.ctx.root, self.ctx.repo)
+        repos.prune_pins(self.ctx.root, self.host.name)
+        repos.start_migration(self.ctx)
+        fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
+        return merge_outputs(*outputs)
+
+    def _toolprune_notices(self, seen):
+        """The deny list's lines at session start, each said once: what `auto` removed from this
+        checkout's sessions (from this one on), and a proposal still waiting -- under `propose`,
+        or when `auto` could not write the settings file."""
+        out = []
+        cmd, unit = self._cmd("toolprune"), "tool"
+        unt = self.store.read("untool.json") or {}
+        mine = sorted(denylist.applied_for(self.store))
+
+        def few(items):
+            return ", ".join(items[:4]) + ("..." if len(items) > 4 else "")
+        if self.cfg.toolprune == "auto" and seen.get("untool_applied", "") != ",".join(mine):
+            if mine:
+                out.append(self.host.notice(
+                    f"TokenEconomizer removed {len(mine)} {unit}(s) this repository's sessions "
+                    f"never used ({few(mine)}), from this session on. Review with `{cmd}`; "
+                    f"`{cmd} restore` gives them back."))
+            seen["untool_applied"] = ",".join(mine)
+        # What this checkout already applied, or gave back, is no news here (another clone may
+        # not have).
+        kept = set(denylist.kept_for(self.store))
+        prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
+        refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
+        # Under `auto`, a list waiting for the repository to go quiet is no news yet: the
+        # session start after it is written says so (above). A refusal is.
+        if self.cfg.toolprune == "auto" and not refused:
+            held = set(((unt.get("auto_pending") or {}).get("items") or []))
+            prop = [t for t in prop if t not in held]
+        if prop and seen.get("untool") != ",".join(prop):
+            out.append(self.host.notice(
+                f"TokenEconomizer: {len(prop)} {unit}(s) went unused in this repository's recent "
+                f"sessions ({few(prop)})"
+                + f". Review with `{cmd}`; "
+                + (f"they could not be applied ({refused}), and `{cmd} apply` tries again."
+                   if refused else f"nothing changes until you run `{cmd} apply`.")
+            ))
+            seen["untool"] = ",".join(prop)
+        return out
 
     def _inject_map(self, s, seen, block, event, how):
         """The outputs that put the repository map in context (and say so, once per repository)."""
