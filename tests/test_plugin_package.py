@@ -10,14 +10,8 @@ import sys
 
 import pytest
 
-from tests.conftest import git_sh
-
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugin")
-
-
-# Windows runs no shebang: the launchers go through Git Bash's `sh`.
-SH = [git_sh() or "sh"] if os.name == "nt" else []
 
 
 def _json(*parts):
@@ -34,16 +28,16 @@ def test_the_plugin_ships_only_the_omp_surface():
         assert not os.path.exists(os.path.join(PLUGIN, name)), name
     assert not [n for n in os.listdir(os.path.join(PLUGIN, "hooks")) if n.endswith(".json")]
     assert os.path.isfile(os.path.join(PLUGIN, "omp", "tokeneconomizer.ts"))
-    for name in ("te_bootstrap.py", "te", "te-hook", "te.cmd", "te-hook.cmd"):
+    for name in ("te_bootstrap.py", "te.cmd", "te-hook.cmd"):
         assert os.path.isfile(os.path.join(PLUGIN, "scripts", name)), name
+    for gone in ("te", "te-hook"):
+        assert not os.path.exists(os.path.join(PLUGIN, "scripts", gone)), gone
     assert os.path.exists(os.path.join(PLUGIN, "lib", "tokeneconomizer"))
     names = set(os.listdir(os.path.join(PLUGIN, "slash-commands")))
     assert {"microskills.md", "facts.md", "toolprune.md", "untool.md"} <= names
-
-
 def _run_hook(launcher, payload, env, cwd=None):
-    p = subprocess.run(SH + [launcher], input=json.dumps(payload), capture_output=True, text=True,
-                       env=env, timeout=60, cwd=cwd or os.getcwd())
+    p = subprocess.run(["cmd.exe", "/c", launcher], input=json.dumps(payload),
+                       capture_output=True, text=True, env=env, timeout=60, cwd=cwd or os.getcwd())
     return p.returncode, p.stdout, p.stderr
 
 
@@ -63,117 +57,11 @@ def _hook_env(tmp_path, **extra):
 def test_the_launcher_runs_the_dispatcher_from_the_checkout(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
+    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook.cmd"),
                              {"hook_event_name": "SessionStart", "session_id": "s",
                               "cwd": str(work), "source": "startup"}, _hook_env(tmp_path))
     assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
     assert os.path.isdir(tmp_path / "home" / "repos")      # it ran, and recorded the session
-
-
-def _script(path, body):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
-    os.chmod(path, 0o755)
-
-
-def test_on_windows_the_launcher_prefers_python_outside_windowsapps(tmp_path):
-    winapps = tmp_path / "Microsoft" / "WindowsApps"
-    pybin = tmp_path / "Python" / "bin"
-    for name in ("python3", "python3.exe"):
-        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
-    _script(pybin / "python3", f'exec "{sys.executable}" "$@"')
-    work = tmp_path / "work"
-    work.mkdir()
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart", "session_id": "s",
-                              "cwd": str(work), "source": "startup"},
-                             _hook_env(tmp_path, OS="Windows_NT",
-                                       PATH=f"{winapps}:{pybin}:{os.environ.get('PATH', '')}"))
-    assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
-    assert os.path.isdir(tmp_path / "home" / "repos")
-    assert not (tmp_path / "alias_called").exists()
-
-
-def test_on_windows_the_launcher_probes_and_skips_a_broken_alias_when_it_is_the_only_python(tmp_path):
-    winapps = tmp_path / "Microsoft" / "WindowsApps"
-    for name in ("python3", "python3.exe"):
-        _script(winapps / name, f': > "{tmp_path / "alias_called"}"\nexit 9009')
-    work = tmp_path / "work"
-    work.mkdir()
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart", "session_id": "s",
-                              "cwd": str(work), "source": "startup"},
-                             _hook_env(tmp_path, OS="Windows_NT", PATH=str(winapps)))
-    assert code == 0 and json.loads(out) == {}
-    assert (tmp_path / "alias_called").exists()
-
-
-def test_the_launcher_fails_open_without_python(tmp_path):
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart"},
-                             {"PATH": "", "TE_PYTHON": "/nonexistent/python"})
-    assert code == 0 and json.loads(out) == {}
-
-
-def _old_python(path, marker):
-    # Fails the launcher's version probe (`-E -S -c ...`); anything else it is asked to run, it
-    # records.
-    _script(path, f'for a in "$@"; do [ "$a" = -c ] && exit 1; done\n: > "{marker}"\n'
-                  'while IFS= read -r _l; do :; done\necho "{}"')
-
-
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
-def test_the_launcher_skips_a_python3_older_than_the_bootstrap_needs(tmp_path):
-    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
-    _old_python(old, tmp_path / "old_ran")
-    _script(new, f'exec "{sys.executable}" "$@"')
-    work = tmp_path / "work"
-    work.mkdir()
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart", "session_id": "s",
-                              "cwd": str(work), "source": "startup"},
-                             _hook_env(tmp_path, PATH=f"{old.parent}:{new.parent}:/usr/bin:/bin"))
-    assert code == 0 and json.loads(out) == {"omp": {"denyTools": []}}
-    assert os.path.isdir(tmp_path / "home" / "repos")      # the new Python ran the dispatcher
-    assert not (tmp_path / "old_ran").exists()
-
-
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
-def test_with_only_an_old_python_the_launcher_still_hands_it_the_hook(tmp_path):
-    old = tmp_path / "old" / "python3"
-    _old_python(old, tmp_path / "old_ran")
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart"},
-                             {"PATH": str(old.parent),
-                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
-    assert code == 0 and json.loads(out) == {}
-    assert (tmp_path / "old_ran").exists()                 # so the bootstrap can fail open itself
-
-
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
-def test_a_shim_that_runs_no_python_is_passed_over(tmp_path):
-    """A pyenv shim with no version set exits 127 and runs nothing: with no other Python on
-    PATH, the launcher answers no change itself."""
-    shim = tmp_path / "shims" / "python3"
-    _script(shim, 'echo "pyenv: python3: command not found" >&2\nexit 127')
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart"}, {"PATH": str(shim.parent)})
-    assert code == 0 and json.loads(out) == {}
-
-
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX launcher path")
-def test_te_python_runs_as_named_even_beside_a_newer_python(tmp_path):
-    """`TE_PYTHON` is the person's own choice: the launcher runs it without a probe, and the
-    bootstrap says what it needs if it is too old."""
-    old, new = tmp_path / "old" / "python3", tmp_path / "new" / "python3.12"
-    _old_python(old, tmp_path / "old_ran")
-    _script(new, f'exec "{sys.executable}" "$@"')
-    code, out, _ = _run_hook(os.path.join(PLUGIN, "scripts", "te-hook"),
-                             {"hook_event_name": "SessionStart"},
-                             {"PATH": str(new.parent), "TE_PYTHON": str(old),
-                              "TOKENECONOMIZER_HOME": str(tmp_path / "home")})
-    assert code == 0 and json.loads(out) == {}
-    assert (tmp_path / "old_ran").exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="the Windows .cmd launcher")
@@ -221,7 +109,7 @@ def test_the_bundle_runs_without_a_checkout(tmp_path):
     work.mkdir()
     # Run the bundled launcher with the core reachable ONLY through the bundle's lib/: the
     # working folder is empty and the checkout is on no path the launcher reads.
-    code, stdout, stderr = _run_hook(str(bundle / "scripts" / "te-hook"),
+    code, stdout, stderr = _run_hook(str(bundle / "scripts" / "te-hook.cmd"),
                                      {"hook_event_name": "SessionStart", "session_id": "s",
                                       "cwd": str(work), "source": "startup"},
                                      _hook_env(tmp_path, PYTHONNOUSERSITE="1"), cwd=str(work))
