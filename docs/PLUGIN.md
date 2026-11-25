@@ -97,6 +97,13 @@ What the code relies on about omp, and how it was checked.
 * The plugin's own calls run `omp -p`.
 * The above was checked on 18.22.2 against recorded sessions and a live smoke.
 
+**oh-my-pi 19.2.0 — extension load and `/te` overlay verified live, 2026-11-25:**
+
+* The compiled loader resolves `renderMarkdown` from `@oh-my-pi/pi-tui/text/markdown/render`;
+  the removed `getMarkdownTheme`, `Markdown` and `ScrollView` imports are not used.
+* `/te status` rendered through the rows contract in the user-only overlay and closed on a
+  keypress, with no extension-load warning.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `%USERPROFILE%\.tokeneconomizer`),

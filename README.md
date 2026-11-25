@@ -129,7 +129,7 @@ again. To uninstall, `omp plugin uninstall tokeneconomizer`; what it learned sta
 
 | Agent | Supported | Older versions |
 |---|---|---|
-| omp | 18.22.2 | not tested |
+| omp | 19.2.0 | not tested |
 
 **[`plugin/README.md`](plugin/README.md)** walks through installing, everyday use, and
 troubleshooting in more detail.

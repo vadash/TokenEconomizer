@@ -1,6 +1,6 @@
-// Drives the real /te command handler with a stubbed omp UI and asserts the panel
-// markdown. Catches branch-suppression bugs no Python test can reach (the handler
-// decides between the links panel and the CLI stdout dump).
+// Drives the real /te command handler with omp 19.2's supported renderer surface and asserts
+// the panel markdown. Catches host-import incompatibilities and branch-suppression bugs no
+// Python test can reach (the handler decides between the links panel and CLI stdout dump).
 // Run: bun test plugin/omp/  (or npm run test:omp)
 import { beforeAll, describe, expect, test } from "bun:test";
 import { plugin } from "bun";
@@ -25,10 +25,15 @@ let stubRunner: {
   ) => Promise<string>;
 } | null = null;
 
+type PanelView = {
+  render(width: number): readonly string[];
+  handleInput?(data: string): void;
+};
+
 async function panelFor(argline: string, work: string): Promise<string> {
   seen.length = 0;
   const factories: Array<
-    (t: unknown, th: unknown, k: unknown, d: (v: unknown) => void) => unknown
+    (ui: unknown, theme: unknown, keys: unknown, done: (v: unknown) => void) => PanelView
   > = [];
   const ctx = {
     cwd: work,
@@ -37,7 +42,7 @@ async function panelFor(argline: string, work: string): Promise<string> {
     sessionManager: { getSessionId: () => "panel-test", getSessionFile: () => "" },
     ui: {
       custom: (
-        f: (t: unknown, th: unknown, k: unknown, d: (v: unknown) => void) => unknown,
+        f: (ui: unknown, theme: unknown, keys: unknown, done: (v: unknown) => void) => PanelView,
       ) => {
         factories.push(f);
         return Promise.resolve();
@@ -46,7 +51,13 @@ async function panelFor(argline: string, work: string): Promise<string> {
   };
   await handler(argline, ctx);
   const factory = factories.pop();
-  if (factory) factory({ terminal: { rows: 40 }, requestRender() {} }, {}, {}, () => {});
+  const view = factory?.(
+    { size: () => ({ columns: 80, rows: 40 }), requestRender() {} },
+    {},
+    {},
+    () => {},
+  );
+  view?.render(80);
   return seen.join("\n");
 }
 
@@ -56,38 +67,23 @@ beforeAll(async () => {
   // Stubs must register before the extension module loads, hence the dynamic import:
   // a static import would resolve the bare specifiers before plugin() runs.
   plugin({
-    name: "omp-stubs",
+    name: "omp-19.2-stubs",
     setup(build) {
       build.module("@oh-my-pi/pi-coding-agent", () => ({
         loader: "object",
-        exports: {
-          getMarkdownTheme: () => ({}),
-          Markdown: class {
-            constructor(text: string, ..._rest: unknown[]) {
-              seen.push(text);
-              void _rest;
-            }
-            render(_width: number) {
-              return [seen[seen.length - 1] ?? ""];
-            }
-          },
-        },
+        exports: {},
       }));
       build.module("@oh-my-pi/pi-tui", () => ({
         loader: "object",
+        exports: {},
+      }));
+      build.module("@oh-my-pi/pi-tui/text/markdown/render", () => ({
+        loader: "object",
         exports: {
-          ScrollView: class {
-            constructor(..._args: unknown[]) {
-              void _args;
-            }
-            render(_width: number) {
-              return [];
-            }
-            handleScrollKey(_data: string) {
-              return false;
-            }
-            invalidate() {}
-            dispose() {}
+          renderMarkdown(text: string, _width: number, options: { theme?: unknown }) {
+            if (!options?.theme) throw new Error("renderMarkdown requires the host theme");
+            seen.push(text);
+            return [text];
           },
         },
       }));

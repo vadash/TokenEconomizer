@@ -24,9 +24,8 @@
  * shows its output in a user-only overlay panel; `/te config` shows links to the two config files
  * instead of that output.
  */
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { getMarkdownTheme, Markdown } from "@oh-my-pi/pi-coding-agent";
-import { ScrollView } from "@oh-my-pi/pi-tui";
+import type { ExtensionAPI, ExtensionContext, ExtensionRows } from "@oh-my-pi/pi-coding-agent";
+import { renderMarkdown } from "@oh-my-pi/pi-tui/text/markdown/render";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -228,30 +227,74 @@ function configPanel(key: string, global: boolean): string {
 
 /** Render `markdown` in a user-only overlay. The panel is never a session entry, so it costs no
  * context tokens. It is as tall as its content up to the terminal, scrolls when longer, and any
- * key closes it. */
+ * key outside the scroll keys closes it. */
 function showPanel(ctx: ExtensionContext, markdown: string) {
   if (!ctx.hasUI) return;
   void ctx.ui
     .custom(
-      (tui, _theme, _keybindings, done) => {
-        const body = new Markdown(markdown, 1, 1, getMarkdownTheme());
-        let view: ScrollView | undefined;
-        return {
-          render: (width: number) => {
-            if (!view) {
-              const rows = body.render(width).length;
-              const height = Math.min(Math.max(5, rows), Math.max(5, tui.terminal.rows - 4));
-              view = new ScrollView(body, { height, scrollbar: "auto" });
+      (ui, theme, _keybindings, done) => {
+        let rows: readonly string[] = [];
+        let renderedWidth: number | undefined;
+        let offset = 0;
+        const height = () => Math.max(5, ui.size().rows - 4);
+        const view: ExtensionRows = {
+          render(width: number) {
+            if (renderedWidth !== width) {
+              renderedWidth = width;
+              rows = renderMarkdown(markdown, Math.max(1, width), {
+                theme,
+                paddingX: 1,
+                paddingY: 1,
+                hyperlinks: true,
+              });
+              offset = Math.max(0, Math.min(offset, rows.length - height()));
             }
-            return view.render(width);
+            offset = Math.max(0, Math.min(offset, rows.length - height()));
+            return rows.slice(offset, offset + height());
           },
-          invalidate: () => view?.invalidate(),
-          handleInput: (data: string) => {
-            if (view?.handleScrollKey(data)) tui.requestRender();
-            else done(undefined);
+          handleInput(data: string) {
+            const page = Math.max(1, height() - 1);
+            let next = offset;
+            switch (data) {
+              case "\x1b[A":
+              case "\x1bOA":
+                next -= 1;
+                break;
+              case "\x1b[B":
+              case "\x1bOB":
+                next += 1;
+                break;
+              case "\x1b[1;2A":
+                next -= 5;
+                break;
+              case "\x1b[1;2B":
+                next += 5;
+                break;
+              case "\x1b[5~":
+                next -= page;
+                break;
+              case "\x1b[6~":
+                next += page;
+                break;
+              case "\x1b[H":
+              case "\x1b[1~":
+              case "\x1bOH":
+                next = 0;
+                break;
+              case "\x1b[F":
+              case "\x1b[4~":
+              case "\x1bOF":
+                next = Math.max(0, rows.length - height());
+                break;
+              default:
+                done(undefined);
+                return;
+            }
+            offset = Math.max(0, Math.min(next, rows.length - height()));
+            ui.requestRender();
           },
-          dispose: () => view?.dispose(),
         };
+        return view;
       },
       { overlay: true },
     )

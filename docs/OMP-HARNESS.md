@@ -14,16 +14,19 @@ stay plain. Emit both: the link line plus the plain full Windows path line (neve
 
 Anchors (oh-my-pi, read-only):
 
-- `packages/coding-agent/src/extensibility/extensions/types.ts:321-427` (custom/notify surface)
-- `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts:1322-1403` (overlay),
-  `:1309-1317` (notify dispatch)
-- `packages/tui/src/chat/custom-message.ts` (transcript Markdown fallback)
-- `packages/tui/src/components/markdown.ts:4303` (explicit-link OSC 8 case)
-- `packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts:825,1046`
-  (`pi-tui` remap — `ScrollView` imports from `@oh-my-pi/pi-tui`)
-- `packages/coding-agent/src/modes/interactive-mode.ts:8771` (status-notice path)
+- `packages/coding-agent/src/extensibility/extensions/types.ts:288-313` (custom factory/options)
+- `packages/coding-agent/src/extensibility/extensions/render-types.ts:14-27` (plain-rows contract)
+- `packages/coding-agent/src/modes/controllers/extension-ui-controller.ts:1609` (overlay host)
+- `packages/tui/src/text/markdown/render.ts:39-82,815` (renderer options and entry point)
+- `packages/tui/src/text/markdown/inline.ts:154-171` (explicit-link OSC 8 case)
+- `packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts:1026-1045,1153-1158`
+  (compiled extensions resolve canonical imports through the host bundle)
 
 Gotchas:
+
+- omp 19.2 removed the `getMarkdownTheme`, `Markdown` and `ScrollView` extension imports.
+  Use `renderMarkdown` from `@oh-my-pi/pi-tui/text/markdown/render` and return an
+  `ExtensionRows` object from `ctx.ui.custom`; pass the factory's theme to the renderer.
 
 - uv/pipx Windows shims are binary `.exe` with no `#!`, so shebang-sniffing
   (`tokeneconomizer/plugin/repomap.py:_aider_command_python`) misses them — prefer an
